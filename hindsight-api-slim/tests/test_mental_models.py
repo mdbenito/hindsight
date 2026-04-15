@@ -1302,6 +1302,95 @@ class TestMentalModelRefreshMaxTokens:
             f"to reflect_async, but got max_tokens={kwargs.get('max_tokens')!r}"
         )
 
+    async def test_refresh_content_respects_max_tokens(self, memory: MemoryEngine, request_context):
+        """End-to-end: refreshed content must stay within the model's max_tokens cap.
+
+        We seed the bank with enough varied facts that an unconstrained synthesis
+        would happily produce a long answer, then refresh a mental model with a
+        small max_tokens and assert the resulting content is actually within the
+        cap (with a small tolerance for cross-tokenizer drift, since the LLM may
+        not use cl100k_base).
+        """
+        from hindsight_api.engine.memory_engine import count_tokens
+
+        bank_id = f"test-refresh-cap-{uuid.uuid4().hex[:8]}"
+        await memory.get_bank_profile(bank_id, request_context=request_context)
+
+        # Seed enough content that an uncapped reflect would produce a long answer.
+        await memory.retain_batch_async(
+            bank_id=bank_id,
+            contents=[
+                {"content": (
+                    "Alice is the staff frontend engineer. She owns the design system, "
+                    "leads accessibility reviews, mentors three junior engineers, and runs "
+                    "the weekly UI guild meeting every Thursday at 2pm Pacific."
+                )},
+                {"content": (
+                    "Bob is the backend tech lead. He owns the payments service, the "
+                    "billing reconciliation pipeline, and the on-call rotation for the "
+                    "platform team. He is the primary reviewer for any database migration."
+                )},
+                {"content": (
+                    "Carol manages the data platform. Her team operates the warehouse, "
+                    "the streaming ingestion layer, and the metrics pipeline that feeds "
+                    "the executive dashboards refreshed every fifteen minutes."
+                )},
+                {"content": (
+                    "The team holds a company-wide demo every other Friday. Engineering "
+                    "presents shipped work, design walks through prototypes, and product "
+                    "shares roadmap updates for the upcoming quarter."
+                )},
+                {"content": (
+                    "Dan is the security lead. He runs the quarterly threat-modeling "
+                    "exercises, owns the incident response runbook, and coordinates the "
+                    "annual external penetration test with the vendor."
+                )},
+                {"content": (
+                    "Erin runs developer experience. She maintains the local-dev tooling, "
+                    "the CI pipelines, the release automation, and the internal "
+                    "documentation portal that everyone uses to onboard new hires."
+                )},
+            ],
+            request_context=request_context,
+        )
+        await memory.wait_for_background_tasks()
+
+        cap = 200
+        mm = await memory.create_mental_model(
+            bank_id=bank_id,
+            name="Team Summary (capped)",
+            source_query="Give me a complete overview of every team member, what they own, and the recurring meetings.",
+            content="initial",
+            max_tokens=cap,
+            request_context=request_context,
+        )
+
+        refreshed = await memory.refresh_mental_model(
+            bank_id=bank_id,
+            mental_model_id=mm["id"],
+            request_context=request_context,
+        )
+
+        assert refreshed is not None
+        content = refreshed["content"]
+        assert content, "refresh produced empty content"
+
+        # The provider enforces the cap exactly in its own tokenizer, but our
+        # local count uses tiktoken (cl100k_base) which can disagree with
+        # provider tokenizers (Gemini's SentencePiece in particular tends to run
+        # ~30% higher for English prose). We use a generous tolerance — the test
+        # is guarding against the regression where the cap was ignored entirely
+        # and content grew toward reflect_async's default of 4096 tokens.
+        observed_tokens = count_tokens(content)
+        tolerance = 1.5
+        assert observed_tokens <= cap * tolerance, (
+            f"refreshed content exceeds max_tokens cap: "
+            f"observed≈{observed_tokens} tokens, cap={cap} (tolerance x{tolerance}). "
+            f"content={content!r}"
+        )
+
+        await memory.delete_bank(bank_id, request_context=request_context)
+
 
 class TestMentalModelTriggerSchema:
     """Unit tests for MentalModelTrigger schema validation (no DB needed)."""
