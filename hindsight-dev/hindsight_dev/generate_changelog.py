@@ -260,21 +260,24 @@ def get_commit_authors(commits: list[Commit]) -> dict[str, str]:
 def _render_entry_meta(commit_id: str, commit_url: str, login: str | None) -> str:
     """Render the muted metadata span (avatar + handle + commit hash) for an entry."""
     parts: list[str] = [
-        '<span style={{fontSize: "0.85em", opacity: 0.7, marginLeft: "0.5em", '
-        'display: "inline-flex", alignItems: "center", gap: "6px", verticalAlign: "middle"}}>'
+        '<span style={{fontSize: "0.85em", color: "var(--ifm-color-emphasis-700)", '
+        'marginLeft: "0.5em", display: "inline-flex", alignItems: "center", gap: "6px", '
+        'verticalAlign: "middle"}}>'
     ]
     if login:
         avatar = f"https://github.com/{login}.png?size=40"
         parts.append(
             f'<a href="https://github.com/{login}" target="_blank" rel="noopener noreferrer" '
-            f'style={{{{display: "inline-flex", alignItems: "center", gap: "4px", textDecoration: "none"}}}}>'
+            f'style={{{{display: "inline-flex", alignItems: "center", gap: "4px", '
+            f'color: "inherit", textDecoration: "none"}}}}>'
             f'<img src="{avatar}" alt="@{login}" width="16" height="16" '
-            f'style={{{{borderRadius: "50%"}}}} />@{login}</a>'
+            f'style={{{{borderRadius: "50%"}}}} /><span style={{{{fontStyle: "italic"}}}}>@{login}</span></a>'
         )
-        parts.append("<span>·</span>")
+        parts.append('<span style={{color: "var(--ifm-color-emphasis-500)"}}>·</span>')
     parts.append(
         f'<a href="{commit_url}" target="_blank" rel="noopener noreferrer" '
-        f'style={{{{fontFamily: "var(--ifm-font-family-monospace, monospace)"}}}}>{commit_id}</a>'
+        f'style={{{{fontFamily: "var(--ifm-font-family-monospace, monospace)", '
+        f'color: "inherit"}}}}>{commit_id}</a>'
     )
     parts.append("</span>")
     return "".join(parts)
