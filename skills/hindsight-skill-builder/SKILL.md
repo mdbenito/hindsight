@@ -100,17 +100,68 @@ Wait for approval. Iterate on the source_query especially — that's what determ
 
 The source_query must produce **the complete playbook** the skill follows — not "user preferences", not a bullet dump. The MM's output IS the skill's entire behavioral instruction set for this task.
 
-A strong source_query:
-- States the task and who it's for in one line ("You are the playbook a curator follows to assemble <user>'s daily AI/ML news feed.")
-- Asks Hindsight to produce a full playbook: task definition, sections, structure, format, specific rules extracted from retained facts, and sensible defaults for sections where the user hasn't given guidance yet
-- Tells the MM how to structure its output (clear sections, omit empty ones)
-- Instructs on mixing extracted + default content: "Use sensible generic defaults where the user hasn't spoken; clearly mark those so the skill knows they're provisional."
-- Specifies conflict resolution ("newer advice wins; mark contradicted older advice as stale")
-- Asks for extrapolation from partial advice ("where advice is partial, extrapolate intent to related cases")
+**Use the universal playbook template below for every skill you build**, customized only in the leading paragraph that names the task and the user. The section headers stay identical across skills so the loader skill can rely on the shape.
 
-A weak source_query ("what are my preferences") produces an empty MM on day one and a thin bullet list later. A strong one produces a drop-in prompt the skill can follow from day one, updated with user-specific adjustments as feedback accumulates.
+Universal template (copy + fill the `<angle-bracket>` parts for the specific task):
 
-**Bootstrap problem to avoid:** on day one the bank has zero user facts about this task. The source_query must be self-sufficient enough that Hindsight produces a competent generic playbook from the source_query alone — then each consolidation cycle enriches it with real user guidance.
+```
+You are the complete playbook a <ROLE> follows to do <TASK> for the user.
+
+Read everything retained in this bank about how the user wants <TASK>
+done, extract durable rules from their advice / corrections / reactions,
+and produce a self-sufficient playbook organized into the sections
+below. Where the user has given explicit guidance, follow it exactly.
+Where advice is partial, extrapolate intent to adjacent cases. Where
+a section has no durable user input yet, provide a sensible generic
+default and mark it as "(default — no user guidance yet)". Omit a
+section entirely only when it genuinely doesn't apply to this task.
+
+When two pieces of advice conflict, the newer wins; mark the older as
+stale.
+
+Output sections, in this exact order:
+
+## Purpose
+One sentence: what this skill does, for whom, under what trigger.
+
+## Scope
+- In scope: what this skill handles
+- Out of scope: what belongs to sibling skills or to the user directly
+
+## Rules
+- Always: hard constraints the user has stated (must-haves, must-nots)
+- Prefer: softer defaults (style, ordering, priorities)
+
+## Procedure
+Numbered steps at the level of guidance, not code. Reference the
+Inputs and Output sections by name rather than restating their
+content.
+
+## Inputs and context
+Where material comes from: sources, channels, time windows, people,
+external context this skill depends on.
+
+## Output shape
+- Structure
+- Format
+- Length / cap
+- Voice / tone
+
+## Stop conditions
+When to refuse or ask a clarifying question instead of guessing.
+
+## Open questions
+Things the user hasn't told me yet that would sharpen the playbook
+next time they interact.
+```
+
+Why a universal template:
+- Loader skills can rely on a stable structure (Rules before Procedure before Output, always).
+- Cross-skill transfer — a user's "always cite sources" rule looks the same in a research skill and a blog skill.
+- Less cognitive load for the user — they learn one playbook shape, not one per task.
+- Empty-task bootstrap works: the template's defaults kick in on day one; user advice enriches them over time.
+
+Only tweak the leading paragraph (role / task / user) per skill. Do NOT invent skill-specific section names (like "TAKE", "DROP", "CAP" — those are news-feed jargon leaking into the MM). Keep the headers.
 
 ---
 
