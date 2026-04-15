@@ -1253,6 +1253,56 @@ class TestMentalModelTriggerTagsConfig:
         await memory.delete_bank(bank_id, request_context=request_context)
 
 
+class TestMentalModelRefreshMaxTokens:
+    """Verify that refresh_mental_model honors the per-model max_tokens column.
+
+    These tests mock the engine's collaborators so we can assert the exact kwargs
+    passed to reflect_async without spinning up a DB or LLM. The bug being guarded
+    against: the per-model ``max_tokens`` column was ignored during refresh, so
+    reflect_async fell back to its default (4096) and the generated content could
+    exceed the user-configured limit when there were many facts to synthesize.
+    """
+
+    async def test_refresh_passes_stored_max_tokens_to_reflect(self, request_context):
+        from unittest.mock import AsyncMock
+
+        from hindsight_api.engine.memory_engine import MemoryEngine
+        from hindsight_api.engine.response_models import ReflectResult
+
+        custom_max_tokens = 777
+        mental_model = {
+            "id": "mm-1",
+            "bank_id": "bank-1",
+            "name": "Capped Model",
+            "source_query": "Summarize the facts",
+            "content": "initial",
+            "tags": None,
+            "max_tokens": custom_max_tokens,
+            "trigger": {"refresh_after_consolidation": False},
+        }
+
+        engine = MemoryEngine.__new__(MemoryEngine)
+        engine._authenticate_tenant = AsyncMock(return_value=None)  # type: ignore[method-assign]
+        engine.get_mental_model = AsyncMock(return_value=mental_model)  # type: ignore[method-assign]
+        engine.reflect_async = AsyncMock(  # type: ignore[method-assign]
+            return_value=ReflectResult(text="stub synthesis", based_on={})
+        )
+        engine.update_mental_model = AsyncMock(return_value=mental_model)  # type: ignore[method-assign]
+
+        await engine.refresh_mental_model(
+            bank_id="bank-1",
+            mental_model_id="mm-1",
+            request_context=request_context,
+        )
+
+        assert engine.reflect_async.await_count == 1
+        kwargs = engine.reflect_async.await_args.kwargs
+        assert kwargs.get("max_tokens") == custom_max_tokens, (
+            f"refresh_mental_model should forward the stored max_tokens ({custom_max_tokens}) "
+            f"to reflect_async, but got max_tokens={kwargs.get('max_tokens')!r}"
+        )
+
+
 class TestMentalModelTriggerSchema:
     """Unit tests for MentalModelTrigger schema validation (no DB needed)."""
 
