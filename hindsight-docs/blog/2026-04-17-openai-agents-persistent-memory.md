@@ -67,9 +67,9 @@ export HINDSIGHT_API_LLM_API_KEY=YOUR_OPENAI_KEY
 hindsight-api
 ```
 
-Runs locally at `http://localhost:8888` with embedded Postgres, embeddings, and reranking.
+Runs locally at `http://localhost:8888` with embedded Postgres, embeddings, and reranking. See the [self-hosting quickstart](/developer/api/quickstart) for full setup instructions.
 
-Or use [Hindsight Cloud](https://ui.hindsight.vectorize.io/signup) and skip self-hosting. See the [quickstart](/developer/api/quickstart) for setup.
+Or skip self-hosting entirely — [Hindsight Cloud](https://ui.hindsight.vectorize.io/signup) is ready in seconds with no infrastructure to manage.
 
 ## Step 2: Install the integration
 
