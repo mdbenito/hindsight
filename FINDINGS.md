@@ -248,6 +248,126 @@ The synthesis runs after each session, not during. But the latency needs to be b
 
 6. **Shared topic namespace**: a "global" or "shared" bank that all per-agent banks can read from. Populated by cross-bank observation analysis.
 
+## Hindsight Feature Proposal: Knowledge Base (KB)
+
+### Naming
+
+- **Knowledge Base (KB)**: a named collection of related mental models within a bank, maintained by a shared mission/policy. Multiple KBs per bank. Each KB auto-manages its MMs from tagged observations.
+- **Mental Model**: unchanged — one synthesized page within a KB (or standalone).
+- **Mount**: client-side file rendering of a KB's mental models so the agent can browse them as files.
+
+### Data model
+
+```
+KnowledgeBase:
+  id              text PK
+  bank_id         text FK → banks
+  name            text
+  mission         text         # policy: what topics to maintain, when to create/split, structure conventions
+  tags            text[]       # scopes which observations feed this KB
+  auto_create     boolean      # create new MMs when observations don't fit existing ones
+  split_threshold int          # max statements per MM before proposing a split
+  created_at      timestamptz
+  updated_at      timestamptz
+```
+
+Mental models gain: `kb_id text FK → knowledge_bases (nullable)`. Null = standalone MM (backward-compatible).
+
+### Pipeline (server-side, after consolidation)
+
+```
+retain → extraction → observations (tagged via retain_tags or auto)
+                          ↓
+         consolidation produces new observations
+                          ↓
+         refresh_after_consolidation fires
+                          ↓
+         for each KB whose tags match new observations:
+           1. KB mission + observation list + existing MM index → LLM routing call:
+              "which MMs should receive which observations? any new MMs needed?"
+           2. For each affected MM: delta-mode refresh scoped to routed observations
+           3. If auto_create=true and LLM proposed new MMs: create them with initial content
+           4. Update KB.updated_at
+```
+
+No new write path for observations. The KB layer sits between consolidation and MM refresh — it adds routing + auto-creation, then delegates to existing MM refresh (with the delta mode being built).
+
+### API
+
+```
+POST   /v1/{tenant}/banks/{bank_id}/knowledge-bases                    # create KB
+GET    /v1/{tenant}/banks/{bank_id}/knowledge-bases                    # list KBs
+GET    /v1/{tenant}/banks/{bank_id}/knowledge-bases/{kb_id}            # get KB + its MM list
+PATCH  /v1/{tenant}/banks/{bank_id}/knowledge-bases/{kb_id}            # update mission/tags/policy
+DELETE /v1/{tenant}/banks/{bank_id}/knowledge-bases/{kb_id}            # delete KB (MMs stay as orphans or get deleted)
+GET    /v1/{tenant}/banks/{bank_id}/mental-models?kb={kb_id}           # list MMs in a KB
+```
+
+### CLI
+
+```
+hindsight kb create <bank> <name> --mission "..." [--tags tag1,tag2] [--auto-create]
+hindsight kb list <bank>
+hindsight kb get <bank> <kb_id>
+hindsight kb update <bank> <kb_id> --mission "..."
+hindsight kb delete <bank> <kb_id>
+hindsight mental-model list <bank> --kb <kb_id>
+```
+
+### Client-side mount
+
+The harness plugin (or a standalone CLI tool) renders a KB's mental models as files:
+
+```
+~/.agent-knowledge/<bank>/<kb>/
+  _index.md              # auto-generated: one line per MM with name + summary
+  preferences.md         # MM "preferences" content rendered as markdown
+  source-list.md         # MM "source-list" content
+  feed-log.md            # MM "feed-log" content (activity log)
+  ...
+```
+
+Sync modes:
+- **Eager** (default): dump all MMs to disk at session start. Simple, slight startup cost.
+- **Lazy**: first `ls` triggers sync, cached for the session.
+
+The agent reads files with normal tools (Read, cat, ls). No new tools needed. The mount is a convenience layer — the agent can also call the API directly via CLI.
+
+### Recall integration
+
+Recall results gain `mental_model_ids: ["preferences", "source-list"]` when the matched observation was used to produce content in those MMs. The agent can:
+
+1. `recall("RSS feeds")` → gets facts + which MMs contain related synthesized knowledge
+2. Read those MMs for the full page
+
+Recall = search. MM = read the synthesized page. Two complementary operations.
+
+### Skill file (agent is read-only)
+
+```markdown
+---
+name: agent-memory
+description: Your knowledge is stored as files mounted from Hindsight.
+  Browse ~/.agent-knowledge/<bank>/<kb>/ for preferences, procedures,
+  activity history. You read; the system writes.
+---
+
+# Agent Memory
+
+Browse your knowledge at `~/.agent-knowledge/<bank>/<kb>/`.
+
+- `ls` to see available topics
+- `cat` to read a topic
+- Use `hindsight memory recall <bank> "<query>"` if you need to search
+
+You never write to these files. The system updates them automatically
+from your conversations.
+```
+
+The agent's only job is reading. All write reliability concerns eliminated.
+
+---
+
 ## PoC Spec: LLM Wiki Maintainer (Hindsight-agnostic)
 
 Standalone tool that maintains a structured wiki from conversation transcripts. No database, no server, no Hindsight dependency. Pure files + LLM calls. Designed to validate the pattern before deciding what to build into Hindsight.
