@@ -125,6 +125,129 @@ The file wiki becomes the *rendered output* of the external system's synthesis, 
 
 ---
 
+## Requirements: What the External System Actually Needs
+
+The file-based experiment revealed that the external system isn't just "Hindsight as-is with a hook". The system needs to present knowledge the way the agent naturally wants to consume it — as a navigable, topic-organized structure, not a flat bag of facts.
+
+### The core problem Hindsight doesn't solve today
+
+Hindsight stores facts (world/experience/observation) in a flat bank. Recall does semantic search over them. Mental models synthesize a text blob from a source_query. None of these give the agent what the file-based wiki gave naturally: **a browsable topic structure where each topic is a self-contained briefing with provenance**.
+
+The agent doesn't want to ask "recall everything about news preferences". It wants to open the "preferences" page, read it, and act. The system needs to support that navigation pattern.
+
+### Required capabilities
+
+**1. Topic-based organization (file-system-like interface)**
+
+The system must let the agent (or a synthesis process) organize knowledge into named topics — like files in a directory:
+
+```
+bank/
+  preferences          → current feed preferences + evidence
+  source-list          → allowed/blocked sources + evidence
+  rss-procedure        → how to fetch feeds reliably
+  user-setup           → user's local config details
+  feed-log             → activity history (append-only)
+```
+
+Each topic is a first-class entity with: id/name, content (structured text), provenance (which observations produced each statement), created_at, updated_at.
+
+Not a flat list of 10,000 facts. Not a single mental-model blob. A navigable directory of topics the agent can `ls` and selectively `cat`.
+
+**2. The system creates and maintains topics, not the agent**
+
+After each session, the system:
+- Reads the new session transcript
+- Decides which existing topics need updating and whether new topics should be created
+- Updates topic content with surgical changes (delta, not full rewrite)
+- Tracks provenance: every statement in a topic links back to the observation(s) that produced it
+- Handles contradiction resolution (newer wins, older marked superseded)
+- Handles topic splitting (when a topic grows too large) and merging (when two topics overlap)
+
+The agent NEVER writes to the topic store. It only reads. This eliminates the write-reliability problem entirely.
+
+**3. Activity logging is a built-in concern, not agent-driven**
+
+The system automatically maintains activity logs from session transcripts. For each completed task run detected in a transcript:
+- What was requested
+- What was delivered (extracted from assistant output)
+- Sources used
+- User reaction (if any)
+
+The agent reads the activity log as another topic. It doesn't write it.
+
+**4. Navigable interface for the agent**
+
+The agent needs these operations at runtime:
+- `list_topics()` → returns topic names + one-line descriptions (like `_index.md`)
+- `read_topic(name)` → returns the current content of that topic
+- `read_topic(name, with_provenance=true)` → returns content + which observations back each statement
+- `search_topics(query)` → semantic search across all topic content (for when the agent doesn't know which topic to read)
+
+These map cleanly to CLI commands or MCP tools:
+```bash
+hindsight topics list <bank>
+hindsight topics read <bank> <topic>
+hindsight topics search <bank> "query"
+```
+
+**5. Provenance is structural, not textual**
+
+In the file-based approach, provenance is an `## Evidence` section the agent writes manually — unreliable and expensive. In the external system, provenance is a first-class data relationship:
+
+```
+topic_statement {
+  text: "Item cap: 10 per run"
+  sources: [observation_id_1, observation_id_2]
+  first_stated: 2026-04-15
+  last_reinforced: 2026-04-17
+  confidence: high (3 supporting observations)
+  status: active
+}
+```
+
+Every statement traces to the observations that produced it. The agent can ask "why do you think the cap is 10?" and get back the actual user quotes. No manual evidence section needed.
+
+**6. Cross-agent topic sharing**
+
+Some topics are agent-specific (news-feed preferences). Others should be shared across agents (user voice, user timezone, known tools). The system needs:
+- Per-agent topic namespaces (default)
+- Shared/global topics that any agent can read
+- No agent can write to another agent's namespace (the system does the cross-pollination if needed)
+
+**7. Async processing with bounded latency**
+
+The synthesis runs after each session, not during. But the latency needs to be bounded:
+- Activity logs: updated within seconds (mechanical extraction, no LLM)
+- Knowledge topics: updated within minutes (LLM synthesis, can be batched)
+- The agent should know when topics were last updated (`last_updated` timestamp on each topic) so it can decide whether to also scan recent raw session transcripts for very-recent-turn context
+
+### How this maps to Hindsight's current primitives
+
+| Required capability | Current Hindsight | Gap |
+|---|---|---|
+| Topic-based organization | Mental models (one per topic) | ✅ Close — MMs are named, per-bank, have content. But they're text blobs, not structured statements. |
+| System creates/maintains topics | Consolidation + MM refresh | ⚠️ Partial — consolidation extracts observations, MM refresh synthesizes from source_query. But no topic auto-creation, no structural delta updates, no topic splitting/merging. |
+| Activity logging | Auto-retain captures sessions | ❌ No structured activity log extraction. Raw session text is retained but not parsed into "what was delivered". |
+| Navigable interface | `mental-model list/get` | ⚠️ Close — list + get work. No `search` across MM content. No one-line descriptions in list. |
+| Structural provenance | Not implemented | ❌ MM content is a text blob. No per-statement source tracking. |
+| Cross-agent sharing | Multi-bank, but isolated | ❌ No shared topics across banks. Would need a cross-bank reference mechanism. |
+| Bounded async latency | Consolidation + `refresh_after_consolidation` | ⚠️ Works but latency is variable (depends on worker queue depth). No guaranteed SLA. Activity log extraction doesn't exist. |
+
+### What would need to change in Hindsight
+
+1. **Mental models → Topics**: rename/rebrand to make the navigation metaphor explicit. Each "topic" has structured content (list of statements with provenance), not a text blob. Rendered to text for agent consumption, but stored as cited fragments internally.
+
+2. **Auto-topic-creation**: the consolidation pipeline should detect when observations don't fit any existing topic and propose a new one. Currently MMs are user-created; topics should emerge from the data.
+
+3. **Activity log as a built-in topic type**: a special topic that's populated mechanically from retained session transcripts — no LLM needed for "what was delivered", just structured extraction from the assistant's output.
+
+4. **Delta updates with provenance**: each topic update is a patch (add statement X citing observations [a,b], supersede statement Y), not a full rewrite. The current MM delta mode work is heading here.
+
+5. **Topic search**: semantic search across topic content, not just fact recall. "Which topic talks about RSS?" → returns the topic name, not 10 raw facts.
+
+6. **Shared topic namespace**: a "global" or "shared" bank that all per-agent banks can read from. Populated by cross-bank observation analysis.
+
 ## Open Questions
 
 1. **Can the agent self-correct with just a checklist?** The `📝 Memory` checklist helps but it's unclear if it's reliable over 100+ sessions. Needs longer testing.
