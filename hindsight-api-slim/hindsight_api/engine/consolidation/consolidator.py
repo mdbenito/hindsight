@@ -750,13 +750,19 @@ async def _run_knowledge_base_updates(
         obs_summaries = [r["text"][:200] for r in recent_obs]
 
         prompt = (
-            f"You are organizing a knowledge base.\n\n"
+            "You are organizing a knowledge base into topic pages.\n\n"
             f"KB Mission: {mission}\n\n"
             f"Existing pages: {', '.join(existing_mm_names) if existing_mm_names else '(none yet)'}\n\n"
-            f"Recent observations ({len(obs_summaries)}):\n" + "\n".join(f"- {s}" for s in obs_summaries[:20]) + "\n\n"
-            "Based on the mission and these observations, should any new pages be created?\n"
-            "Only suggest a new page if observations clearly cover a topic NOT already handled by an existing page.\n"
-            'Respond ONLY with a JSON array of objects: [{"id": "page-id", "name": "Page Name", "source_query": "The query..."}]\n'
+            f"Recent observations ({len(obs_summaries)}):\n"
+            + "\n".join(f"- {s}" for s in obs_summaries[:20])
+            + "\n\n"
+            "Based on the mission and these observations, should any new topic pages be created?\n"
+            "Only suggest a new page if observations clearly cover a topic NOT already handled by an existing page.\n\n"
+            "IMPORTANT: The `source_query` field is a QUESTION that will be asked to the memory system to generate the page content. "
+            "It is NOT the content itself. Write it as a comprehensive question that, when answered by searching through all observations in the bank, "
+            "would produce a useful synthesis for that topic. "
+            'Example: "What are the user\'s current preferences for their AI news feed — topics, sources, format, depth, item cap, and voice?"\n\n'
+            'Respond ONLY with a JSON array: [{"id": "lowercase-with-hyphens", "name": "Human Readable Name", "source_query": "A comprehensive question..."}]\n'
             "If no new pages are needed, respond with an empty array: []\n"
             "Do not include any other text."
         )
