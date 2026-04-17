@@ -756,11 +756,18 @@ async def _run_knowledge_base_updates(
             f"Recent observations ({len(obs_summaries)}):\n"
             + "\n".join(f"- {s}" for s in obs_summaries[:20])
             + "\n\n"
-            "Based on the mission and these observations, should any new topic pages be created?\n"
-            "Only suggest a new page if observations clearly cover a topic NOT already handled by an existing page.\n\n"
-            "IMPORTANT: The `source_query` field is a QUESTION that will be asked to the memory system to generate the page content. "
-            "It is NOT the content itself. Write it as a comprehensive question that, when answered by searching through all observations in the bank, "
-            "would produce a useful synthesis for that topic. "
+            "Should any new topic pages be created?\n\n"
+            "STRICT RULES:\n"
+            "1. ONLY create pages that directly serve the KB Mission above. "
+            "If an observation is interesting but outside the mission's scope, IGNORE IT.\n"
+            "2. Do NOT create pages about the agent's own behavior, identity, tool usage, "
+            "configuration, or internal workings — those are not knowledge pages.\n"
+            "3. Do NOT create pages about the content of task outputs (e.g., news articles the agent delivered). "
+            "Only create pages about the USER's preferences, rules, procedures, and decisions.\n"
+            "4. Only suggest a page if observations clearly cover a topic NOT already handled by an existing page.\n"
+            "5. Prefer fewer, broader pages over many narrow ones. When in doubt, return [].\n\n"
+            "The `source_query` field is a QUESTION that will be asked to the memory system to synthesize the page content. "
+            "It is NOT the content itself. Write it as a comprehensive question about the USER's preferences or procedures. "
             'Example: "What are the user\'s current preferences for their AI news feed — topics, sources, format, depth, item cap, and voice?"\n\n'
             'Respond ONLY with a JSON array: [{"id": "lowercase-with-hyphens", "name": "Human Readable Name", "source_query": "A comprehensive question..."}]\n'
             "If no new pages are needed, respond with an empty array: []\n"
