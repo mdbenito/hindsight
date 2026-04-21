@@ -8096,9 +8096,7 @@ class MemoryEngine(MemoryEngineInterface):
 
                     for child_row in child_rows:
                         raw_crm = child_row["result_metadata"]
-                        child_metadata = (
-                            json.loads(raw_crm) if isinstance(raw_crm, str) else (raw_crm or {})
-                        )
+                        child_metadata = json.loads(raw_crm) if isinstance(raw_crm, str) else (raw_crm or {})
                         child_status = child_row["status"]
 
                         child_statuses.append(

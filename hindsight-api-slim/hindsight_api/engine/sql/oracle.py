@@ -19,12 +19,36 @@ class OracleDialect(SQLDialect):
     # ABOUT, AND, BT, BTG, BTI, BTP, EQUIV, FUZZY, HASPATH, INPATH,
     # MINUS, NEAR, NOT, NT, NTG, NTI, NTP, OR, PT, RT, SQE, SYN,
     # TR, TRSYN, TT, WITHIN.
-    _ORACLE_TEXT_RESERVED = frozenset({
-        "about", "and", "bt", "btg", "bti", "btp", "equiv", "fuzzy",
-        "haspath", "inpath", "minus", "near", "not", "nt", "ntg",
-        "nti", "ntp", "or", "pt", "rt", "sqe", "syn", "tr", "trsyn",
-        "tt", "within",
-    })
+    _ORACLE_TEXT_RESERVED = frozenset(
+        {
+            "about",
+            "and",
+            "bt",
+            "btg",
+            "bti",
+            "btp",
+            "equiv",
+            "fuzzy",
+            "haspath",
+            "inpath",
+            "minus",
+            "near",
+            "not",
+            "nt",
+            "ntg",
+            "nti",
+            "ntp",
+            "or",
+            "pt",
+            "rt",
+            "sqe",
+            "syn",
+            "tr",
+            "trsyn",
+            "tt",
+            "within",
+        }
+    )
 
     # -- Parameter binding -----------------------------------------------
 
