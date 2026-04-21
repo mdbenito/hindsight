@@ -2571,11 +2571,10 @@ def create_app(
                 metrics_collector.set_db_pool(memory._pool)
                 logging.info("DB pool metrics configured")
 
-        # Start worker poller if enabled (standalone mode).
-        # WorkerPoller still uses raw asyncpg pool APIs and PG-specific SQL,
-        # so it cannot run on Oracle yet. Skip it to avoid a crash on startup.
-        is_oracle = config.database_backend == "oracle"
-        if config.worker_enabled and memory._pool is not None and not is_oracle:
+        # Start worker poller if the backend supports it.
+        # Backends that don't support async worker/poller (e.g. Oracle) use
+        # SyncTaskBackend instead, executing tasks inline.
+        if config.worker_enabled and memory._pool is not None and memory._backend.supports_worker_poller:
             from ..config import DEFAULT_DATABASE_SCHEMA
 
             worker_id = config.worker_id or socket.gethostname()
@@ -2593,10 +2592,10 @@ def create_app(
             )
             poller_task = asyncio.create_task(poller.run())
             logging.info(f"Worker poller started (worker_id={worker_id})")
-        elif is_oracle and config.worker_enabled:
+        elif config.worker_enabled and not memory._backend.supports_worker_poller:
             logging.warning(
-                "Worker poller disabled on Oracle backend — async operations "
-                "(mental model refresh, consolidation) will run synchronously."
+                "Worker poller disabled — backend does not support async operations. "
+                "Tasks (mental model refresh, consolidation) will run synchronously."
             )
 
         # Call tenant extension startup hook (e.g. JWKS fetch for Supabase)

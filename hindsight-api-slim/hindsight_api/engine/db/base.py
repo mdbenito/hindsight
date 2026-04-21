@@ -4,6 +4,7 @@ Defines the interfaces that all database backends (PostgreSQL, Oracle, etc.)
 must implement. Business logic depends only on these interfaces.
 """
 
+import json
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -30,6 +31,23 @@ class DatabaseConnection(ABC):
     def backend_type(self) -> str:
         """Return ``"postgresql"`` or ``"oracle"``."""
         return "postgresql"
+
+    def parse_json(self, value: Any) -> Any:
+        """Parse a JSON column value into a Python object.
+
+        PG (asyncpg) returns JSON columns as strings that need json.loads().
+        Oracle returns them as pre-parsed dicts/lists (via OracleConnection
+        row conversion). This method normalizes both to Python objects.
+        """
+        if value is None:
+            return None
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                return value
+        # Already a dict/list (Oracle pre-parses JSON columns)
+        return value
 
     async def bulk_insert_from_arrays(
         self,
@@ -223,6 +241,33 @@ class DatabaseBackend(ABC):
     def supports_pg_trgm(self) -> bool:
         """Platform *might* have pg_trgm (must still be checked at runtime)."""
         return True
+
+    @property
+    def supports_worker_poller(self) -> bool:
+        """Whether this backend supports the async WorkerPoller.
+
+        WorkerPoller uses raw asyncpg pool APIs and PG-specific SQL.
+        Backends that don't support it use SyncTaskBackend instead.
+        """
+        return True
+
+    def run_migrations(self, dsn: str, *, schema: str | None = None) -> None:
+        """Run database migrations for this backend.
+
+        PG uses Alembic migrations. Oracle uses its own idempotent DDL runner.
+        Subclasses must override this method.
+        """
+        raise NotImplementedError(f"{type(self).__name__} must implement run_migrations()")
+
+    def create_task_backend(self, *, pool_getter: Any = None, schema_getter: Any = None) -> Any:
+        """Create the appropriate task backend for this database.
+
+        PG uses BrokerTaskBackend for async worker/poller execution.
+        Oracle uses SyncTaskBackend for inline execution.
+        """
+        from ..task_backend import BrokerTaskBackend
+
+        return BrokerTaskBackend(pool_getter=pool_getter, schema_getter=schema_getter)
 
     @abstractmethod
     async def initialize(

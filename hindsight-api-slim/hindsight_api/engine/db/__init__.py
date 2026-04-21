@@ -26,6 +26,32 @@ __all__ = [
 ]
 
 
+def _get_backend_class(backend_type: str) -> type[DatabaseBackend]:
+    """Resolve backend class by name using lazy imports."""
+    if backend_type == "postgresql":
+        from .postgresql import PostgreSQLBackend
+
+        return PostgreSQLBackend
+    if backend_type == "oracle":
+        from .oracle import OracleBackend
+
+        return OracleBackend
+    raise ValueError(f"Unknown database backend: {backend_type!r}. Supported: 'postgresql', 'oracle'.")
+
+
+def _get_ops_class(backend_type: str) -> type[DataAccessOps]:
+    """Resolve ops class by name using lazy imports."""
+    if backend_type == "postgresql":
+        from .ops_postgresql import PostgreSQLOps
+
+        return PostgreSQLOps
+    if backend_type == "oracle":
+        from .ops_oracle import OracleOps
+
+        return OracleOps
+    raise ValueError(f"Unknown data access ops: {backend_type!r}. Supported: 'postgresql', 'oracle'.")
+
+
 def create_database_backend(backend_type: str) -> DatabaseBackend:
     """Factory: create a DatabaseBackend by name.
 
@@ -38,15 +64,7 @@ def create_database_backend(backend_type: str) -> DatabaseBackend:
     Raises:
         ValueError: If backend_type is not recognized.
     """
-    if backend_type == "postgresql":
-        from .postgresql import PostgreSQLBackend
-
-        return PostgreSQLBackend()
-    elif backend_type == "oracle":
-        from .oracle import OracleBackend
-
-        return OracleBackend()
-    raise ValueError(f"Unknown database backend: {backend_type!r}. Supported backends: 'postgresql', 'oracle'.")
+    return _get_backend_class(backend_type)()
 
 
 def create_data_access_ops(backend_type: str) -> DataAccessOps:
@@ -61,12 +79,4 @@ def create_data_access_ops(backend_type: str) -> DataAccessOps:
     Raises:
         ValueError: If backend_type is not recognized.
     """
-    if backend_type == "postgresql":
-        from .ops_postgresql import PostgreSQLOps
-
-        return PostgreSQLOps()
-    elif backend_type == "oracle":
-        from .ops_oracle import OracleOps
-
-        return OracleOps()
-    raise ValueError(f"Unknown data access ops: {backend_type!r}. Supported: 'postgresql', 'oracle'.")
+    return _get_ops_class(backend_type)()

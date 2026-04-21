@@ -10,7 +10,7 @@ import os
 import sys
 from dataclasses import dataclass, field, fields
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from dotenv import find_dotenv, load_dotenv
 
@@ -781,7 +781,7 @@ class HindsightConfig:
     """Configuration container for Hindsight API."""
 
     # Database
-    database_backend: str  # "postgresql" or "oracle"
+    database_backend: Literal["postgresql", "oracle"]
     database_url: str
     migration_database_url: str | None
     database_schema: str

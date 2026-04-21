@@ -990,6 +990,22 @@ class OracleBackend(DatabaseBackend):
     def supports_pg_trgm(self) -> bool:
         return False
 
+    @property
+    def supports_worker_poller(self) -> bool:
+        return False
+
+    def run_migrations(self, dsn: str, *, schema: str | None = None) -> None:
+        """Run Oracle DDL migrations."""
+        from ...migrations_oracle import run_oracle_migrations
+
+        run_oracle_migrations(dsn, schema=schema)
+
+    def create_task_backend(self, *, pool_getter: Any = None, schema_getter: Any = None) -> Any:
+        """Oracle uses SyncTaskBackend — async worker/poller not yet supported."""
+        from ..task_backend import SyncTaskBackend
+
+        return SyncTaskBackend()
+
     def __init__(self) -> None:
         self._pool: Any = None
         self._oracledb: Any = None

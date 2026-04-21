@@ -204,7 +204,7 @@ from .retain.types import RetainContentDict
 from .search import think_utils
 from .search.reranking import CrossEncoderReranker, apply_combined_scoring
 from .search.tags import TagGroup, TagsMatch, build_tags_where_clause
-from .task_backend import BrokerTaskBackend, SyncTaskBackend, TaskBackend
+from .task_backend import TaskBackend
 
 
 class Budget(str, Enum):
@@ -596,15 +596,15 @@ class MemoryEngine(MemoryEngineInterface):
         self._cross_encoder_reranker = CrossEncoderReranker(cross_encoder=cross_encoder)
 
         # Initialize task backend.
-        # Oracle doesn't support the async worker/poller yet (it uses raw asyncpg
-        # pool APIs and PG-specific SQL), so we use SyncTaskBackend which executes
-        # tasks inline. PG uses BrokerTaskBackend + WorkerPoller for background execution.
+        # Each backend advertises its task execution strategy via create_task_backend().
+        # PG uses BrokerTaskBackend + WorkerPoller for async background execution.
+        # Oracle uses SyncTaskBackend for inline execution (no async worker support yet).
+        # Create the backend object early so we can query its capabilities.
+        self._backend = create_database_backend(self._database_backend_type)
         if task_backend:
             self._task_backend = task_backend
-        elif config.database_backend == "oracle":
-            self._task_backend = SyncTaskBackend()
         else:
-            self._task_backend = BrokerTaskBackend(
+            self._task_backend = self._backend.create_task_backend(
                 pool_getter=lambda: self._backend,
                 schema_getter=get_current_schema,
             )
@@ -1586,7 +1586,7 @@ class MemoryEngine(MemoryEngineInterface):
                 return
 
             raw_rm = row["result_metadata"]
-            result_metadata = json.loads(raw_rm) if isinstance(raw_rm, str) else (raw_rm or {})
+            result_metadata = conn.parse_json(raw_rm) or {}
             parent_operation_id = result_metadata.get("parent_operation_id")
 
             if not parent_operation_id:
@@ -1785,46 +1785,35 @@ class MemoryEngine(MemoryEngineInterface):
 
             config = get_config()
 
-            if self._database_backend_type != "postgresql":
-                # Non-PG backends use their own idempotent migration runner (no Alembic)
-                from ..migrations_oracle import run_oracle_migrations
-
-                logger.info(f"Running {self._database_backend_type} database migrations...")
-                tenants = await self._tenant_extension.list_tenants()
-                if tenants:
-                    for tenant in tenants:
-                        schema = tenant.schema
+            # Run schema migrations via the backend's migration runner.
+            # Each backend handles its own migration strategy:
+            # - PG: Alembic migrations with schema support
+            # - Oracle: idempotent DDL runner (no Alembic)
+            logger.info("Running database migrations...")
+            tenants = await self._tenant_extension.list_tenants()
+            if tenants:
+                logger.info(f"Running migrations on {len(tenants)} schema(s)...")
+                for tenant in tenants:
+                    schema = tenant.schema
+                    if schema:
                         # Non-PG backends use users as schemas; "public" is PG-specific
                         # and doesn't exist — use None (connecting user's default)
-                        alt_schema = None if schema == "public" else schema
-                        if schema:
-                            run_oracle_migrations(self.db_url, schema=alt_schema)
-                    logger.info(f"{self._database_backend_type} schema migrations completed")
-            else:
-                # PostgreSQL uses Alembic migrations
+                        if not self._backend.supports_worker_poller and schema == "public":
+                            schema = None
+                        self._backend.run_migrations(self.db_url, schema=schema)
+                logger.info("Schema migrations completed")
+
+            # PG-specific post-migration steps: ensure vector/text search extensions
+            # and embedding dimensions match configuration. These are no-ops for
+            # non-PG backends since they use different indexing strategies.
+            if self._backend.supports_bm25:
                 from ..migrations import (
                     ensure_embedding_dimension,
                     ensure_text_search_extension,
                     ensure_vector_extension,
-                    run_migrations,
                 )
 
-                # Migrate all schemas from the tenant extension
-                # The tenant extension is the single source of truth for which schemas exist
-                logger.info("Running database migrations...")
-                tenants = await self._tenant_extension.list_tenants()
                 if tenants:
-                    logger.info(f"Running migrations on {len(tenants)} schema(s)...")
-                    for tenant in tenants:
-                        schema = tenant.schema
-                        if schema:
-                            run_migrations(
-                                self.db_url, schema=schema, migration_database_url=config.migration_database_url
-                            )
-                    logger.info("Schema migrations completed")
-
-                    # Ensure embedding column dimension matches the model's dimension
-                    # This is done after migrations and after embeddings.initialize()
                     for tenant in tenants:
                         schema = tenant.schema
                         if schema:
@@ -1835,7 +1824,6 @@ class MemoryEngine(MemoryEngineInterface):
                                 vector_extension=config.vector_extension,
                             )
 
-                    # Ensure vector indexes match the configured extension
                     for tenant in tenants:
                         schema = tenant.schema
                         if schema:
@@ -1843,7 +1831,6 @@ class MemoryEngine(MemoryEngineInterface):
                                 self.db_url, vector_extension=config.vector_extension, schema=schema
                             )
 
-                    # Ensure text search columns/indexes match the configured extension
                     for tenant in tenants:
                         schema = tenant.schema
                         if schema:
@@ -1853,8 +1840,8 @@ class MemoryEngine(MemoryEngineInterface):
 
         logger.info(f"Connecting to database at {mask_network_location(self.db_url)}")
 
-        # Create database backend and SQL dialect via abstraction layer
-        self._backend = create_database_backend(self._database_backend_type)
+        # Create SQL dialect via abstraction layer
+        # (backend was created in __init__ so we can use it for migrations and task backend)
         self._dialect = create_sql_dialect(self._database_backend_type)
 
         # Per-connection initialization callback (PostgreSQL-specific for now)
@@ -3681,10 +3668,7 @@ class MemoryEngine(MemoryEngineInterface):
             if not doc:
                 return None
 
-            retain_params_raw = doc["retain_params"]
-            retain_params_parsed = (
-                json.loads(retain_params_raw) if isinstance(retain_params_raw, str) else retain_params_raw
-            )
+            retain_params_parsed = conn.parse_json(doc["retain_params"])
 
             # document_metadata is sourced from retain_params.metadata
             document_metadata = retain_params_parsed.get("metadata") if retain_params_parsed else None
@@ -5206,10 +5190,7 @@ class MemoryEngine(MemoryEngineInterface):
                 bank_id_val = row["bank_id"]
                 unit_count = count_map.get((doc_id, bank_id_val), 0)
 
-                retain_params_val = row["retain_params"]
-                retain_params_val = (
-                    json.loads(retain_params_val) if isinstance(retain_params_val, str) else retain_params_val
-                )
+                retain_params_val = conn.parse_json(row["retain_params"])
 
                 # document_metadata is sourced from retain_params.metadata
                 document_metadata = retain_params_val.get("metadata") if retain_params_val else None
@@ -8064,10 +8045,10 @@ class MemoryEngine(MemoryEngineInterface):
             if row:
                 # Check if this is a parent operation
                 raw_rm = row["result_metadata"]
-                result_metadata = json.loads(raw_rm) if isinstance(raw_rm, str) else (raw_rm or {})
+                result_metadata = conn.parse_json(raw_rm) or {}
                 is_parent = result_metadata.get("is_parent", False)
                 raw_tp = row["task_payload"] if include_payload else None
-                task_payload = json.loads(raw_tp) if isinstance(raw_tp, str) else raw_tp
+                task_payload = conn.parse_json(raw_tp) if include_payload else None
 
                 # Use status from database (parent status is updated when all children complete/fail)
                 db_status = row["status"]
@@ -8096,7 +8077,7 @@ class MemoryEngine(MemoryEngineInterface):
 
                     for child_row in child_rows:
                         raw_crm = child_row["result_metadata"]
-                        child_metadata = json.loads(raw_crm) if isinstance(raw_crm, str) else (raw_crm or {})
+                        child_metadata = conn.parse_json(raw_crm) or {}
                         child_status = child_row["status"]
 
                         child_statuses.append(

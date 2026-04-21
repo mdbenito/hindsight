@@ -209,11 +209,10 @@ def main():
         else:
             print(f"No tenant extension configured, using schema: {config.database_schema}")
 
-        # WorkerPoller still uses raw asyncpg pool APIs and PG-specific SQL,
-        # so it cannot run on Oracle yet.
-        if config.database_backend == "oracle":
-            print("ERROR: Standalone worker is not yet supported on Oracle backend.")
-            print("Oracle operations run synchronously within the API process.")
+        # Check if the backend supports the async worker/poller.
+        if not memory._backend.supports_worker_poller:
+            print("ERROR: Standalone worker is not supported on this database backend.")
+            print("Operations run synchronously within the API process.")
             sys.exit(1)
 
         # Create a single poller that handles all schemas dynamically

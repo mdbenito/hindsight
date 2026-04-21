@@ -64,6 +64,14 @@ class PostgresConnection(DatabaseConnection):
 class PostgreSQLBackend(DatabaseBackend):
     """DatabaseBackend implementation wrapping an asyncpg connection pool."""
 
+    def run_migrations(self, dsn: str, *, schema: str | None = None) -> None:
+        """Run Alembic migrations for PostgreSQL."""
+        from ...config import get_config
+        from ...migrations import run_migrations
+
+        config = get_config()
+        run_migrations(dsn, schema=schema, migration_database_url=config.migration_database_url)
+
     def __init__(self) -> None:
         self._pool: asyncpg.Pool | None = None
 
