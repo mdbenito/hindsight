@@ -384,6 +384,9 @@ ENV_WORKER_MAX_RETRIES = "HINDSIGHT_API_WORKER_MAX_RETRIES"
 ENV_WORKER_HTTP_PORT = "HINDSIGHT_API_WORKER_HTTP_PORT"
 ENV_WORKER_MAX_SLOTS = "HINDSIGHT_API_WORKER_MAX_SLOTS"
 ENV_WORKER_CONSOLIDATION_MAX_SLOTS = "HINDSIGHT_API_WORKER_CONSOLIDATION_MAX_SLOTS"
+ENV_WORKER_RETAIN_MAX_SLOTS = "HINDSIGHT_API_WORKER_RETAIN_MAX_SLOTS"
+ENV_WORKER_FILE_CONVERT_RETAIN_MAX_SLOTS = "HINDSIGHT_API_WORKER_FILE_CONVERT_RETAIN_MAX_SLOTS"
+ENV_WORKER_REFRESH_MENTAL_MODEL_MAX_SLOTS = "HINDSIGHT_API_WORKER_REFRESH_MENTAL_MODEL_MAX_SLOTS"
 ENV_RETAIN_MAX_CONCURRENT = "HINDSIGHT_API_RETAIN_MAX_CONCURRENT"
 
 # Reflect agent settings
@@ -604,7 +607,10 @@ DEFAULT_WORKER_POLL_INTERVAL_MS = 500  # Poll database every 500ms
 DEFAULT_WORKER_MAX_RETRIES = 3  # Max retries before marking task failed
 DEFAULT_WORKER_HTTP_PORT = 8889  # HTTP port for worker metrics/health
 DEFAULT_WORKER_MAX_SLOTS = 10  # Total concurrent tasks per worker
-DEFAULT_WORKER_CONSOLIDATION_MAX_SLOTS = 2  # Max concurrent consolidation tasks per worker
+DEFAULT_WORKER_CONSOLIDATION_MAX_SLOTS = 2  # Reserved slots for consolidation tasks
+DEFAULT_WORKER_RETAIN_MAX_SLOTS = 0  # Reserved slots for retain tasks (0 = no reservation, uses shared pool)
+DEFAULT_WORKER_FILE_CONVERT_RETAIN_MAX_SLOTS = 0  # Reserved slots for file_convert_retain tasks
+DEFAULT_WORKER_REFRESH_MENTAL_MODEL_MAX_SLOTS = 0  # Reserved slots for refresh_mental_model tasks
 DEFAULT_RETAIN_MAX_CONCURRENT = 4  # Max concurrent retain DB phases (HNSW reads + writes). Limits I/O contention.
 
 # Reflect agent settings
@@ -1063,6 +1069,9 @@ class HindsightConfig:
     worker_http_port: int
     worker_max_slots: int
     worker_consolidation_max_slots: int
+    worker_retain_max_slots: int
+    worker_file_convert_retain_max_slots: int
+    worker_refresh_mental_model_max_slots: int
     retain_max_concurrent: int
 
     # Reflect agent settings
@@ -1274,6 +1283,34 @@ class HindsightConfig:
                 f"\n     (current model: {self.retain_llm_model or self.llm_model}, "
                 f"provider: {self.retain_llm_provider or self.llm_provider})"
             )
+
+        # Validate that sum of per-operation slot reservations does not exceed max_slots
+        slot_reservations = self.worker_slot_reservations
+        total_reserved = sum(slot_reservations.values())
+        if total_reserved > self.worker_max_slots:
+            reservation_details = ", ".join(f"{k}={v}" for k, v in slot_reservations.items() if v > 0)
+            raise ValueError(
+                f"Sum of per-operation slot reservations ({total_reserved}: {reservation_details}) "
+                f"exceeds worker_max_slots ({self.worker_max_slots}). "
+                f"Reduce reservations or increase HINDSIGHT_API_WORKER_MAX_SLOTS."
+            )
+
+    @property
+    def worker_slot_reservations(self) -> dict[str, int]:
+        """Build slot reservations dict from per-operation config fields.
+
+        Only includes operation types with non-zero reservations.
+        """
+        reservations: dict[str, int] = {}
+        if self.worker_consolidation_max_slots > 0:
+            reservations["consolidation"] = self.worker_consolidation_max_slots
+        if self.worker_retain_max_slots > 0:
+            reservations["retain"] = self.worker_retain_max_slots
+        if self.worker_file_convert_retain_max_slots > 0:
+            reservations["file_convert_retain"] = self.worker_file_convert_retain_max_slots
+        if self.worker_refresh_mental_model_max_slots > 0:
+            reservations["refresh_mental_model"] = self.worker_refresh_mental_model_max_slots
+        return reservations
 
     @classmethod
     def from_env(cls) -> "HindsightConfig":
@@ -1660,6 +1697,13 @@ class HindsightConfig:
             worker_max_slots=int(os.getenv(ENV_WORKER_MAX_SLOTS, str(DEFAULT_WORKER_MAX_SLOTS))),
             worker_consolidation_max_slots=int(
                 os.getenv(ENV_WORKER_CONSOLIDATION_MAX_SLOTS, str(DEFAULT_WORKER_CONSOLIDATION_MAX_SLOTS))
+            ),
+            worker_retain_max_slots=int(os.getenv(ENV_WORKER_RETAIN_MAX_SLOTS, str(DEFAULT_WORKER_RETAIN_MAX_SLOTS))),
+            worker_file_convert_retain_max_slots=int(
+                os.getenv(ENV_WORKER_FILE_CONVERT_RETAIN_MAX_SLOTS, str(DEFAULT_WORKER_FILE_CONVERT_RETAIN_MAX_SLOTS))
+            ),
+            worker_refresh_mental_model_max_slots=int(
+                os.getenv(ENV_WORKER_REFRESH_MENTAL_MODEL_MAX_SLOTS, str(DEFAULT_WORKER_REFRESH_MENTAL_MODEL_MAX_SLOTS))
             ),
             retain_max_concurrent=int(os.getenv(ENV_RETAIN_MAX_CONCURRENT, str(DEFAULT_RETAIN_MAX_CONCURRENT))),
             # Reflect agent settings
