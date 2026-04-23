@@ -433,9 +433,12 @@ cleanup()
 
 ## Streaming
 
-Streaming responses (`stream=True`) are supported but **conversation storage is skipped** for streaming calls in the monkeypatch (`enable()`) and callback modes. This is because streaming responses are consumed incrementally by the caller and the full response content is not available at storage time.
+Streaming responses (`stream=True`) are fully supported. When streaming is detected, the response is automatically wrapped to collect chunks as they are consumed. Once the stream is fully consumed (or the context manager exits), the complete conversation is stored to Hindsight.
 
-For streaming with conversation storage, use the **native client wrappers** (`wrap_openai()`, `wrap_anthropic()`), which collect streamed chunks and store the complete conversation after the stream is fully consumed.
+This works across all integration modes:
+- **Monkeypatch wrappers** (`enable()` / `completion()` / `acompletion()`) — streaming responses are wrapped transparently
+- **Native client wrappers** (`wrap_openai()`, `wrap_anthropic()`) — same chunk-collection behavior
+- **Callback handler** — streaming responses are skipped in the callback since the callback doesn't control the return value; use the monkeypatch or native wrapper modes for streaming with storage
 
 ## Requirements
 

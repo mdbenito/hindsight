@@ -672,14 +672,25 @@ class TestStreamingResponseHandling:
         """Clean up after each test."""
         cleanup()
 
-    def test_format_conversation_for_storage_crashes_on_stream_wrapper(self):
-        """Test that _format_conversation_for_storage crashes when given a stream object.
+    def _make_fake_chunks(self):
+        """Create fake streaming chunks mimicking LiteLLM's ModelResponseStream."""
+        from unittest.mock import MagicMock
 
-        This reproduces the exact bug from issue #1221.
+        chunks = []
+        for text in ["Hello", " ", "world", "!"]:
+            chunk = MagicMock()
+            chunk.choices = [MagicMock()]
+            chunk.choices[0].delta.content = text
+            chunks.append(chunk)
+        return chunks
+
+    def test_format_conversation_for_storage_returns_empty_for_stream(self):
+        """Test that _format_conversation_for_storage returns empty for stream objects.
+
+        Reproduces the exact bug from issue #1221.
         """
         from hindsight_litellm import _format_conversation_for_storage
 
-        # Simulate a CustomStreamWrapper - an object without .choices
         class FakeStreamWrapper:
             """Mimics litellm.utils.CustomStreamWrapper which lacks .choices."""
             pass
@@ -687,14 +698,11 @@ class TestStreamingResponseHandling:
         messages = [{"role": "user", "content": "Hello"}]
         stream_response = FakeStreamWrapper()
 
-        # This should NOT crash - but currently does with AttributeError
         result = _format_conversation_for_storage(messages, stream_response)
-        # Should gracefully return empty string for non-ModelResponse objects
-        assert isinstance(result, str)
+        assert result == ""
 
     def test_store_conversation_skips_stream_response(self):
         """Test that _store_conversation handles streaming responses gracefully."""
-        from unittest.mock import patch
         from hindsight_litellm import _store_conversation
 
         configure(hindsight_api_url="http://localhost:8888")
@@ -706,17 +714,19 @@ class TestStreamingResponseHandling:
         messages = [{"role": "user", "content": "Hello"}]
         stream_response = FakeStreamWrapper()
 
-        # Should not raise, should skip storage
+        # Should not raise
         _store_conversation(messages, stream_response, "gpt-4o-mini")
 
-    def test_wrapped_completion_with_stream_true(self):
-        """Test that _wrapped_completion handles stream=True without crashing."""
+    def test_wrapped_completion_returns_stream_wrapper(self):
+        """Test that completion() wraps streaming responses for deferred storage."""
         from unittest.mock import patch, MagicMock
+        from hindsight_litellm import _LiteLLMStreamWrapper
 
         configure(hindsight_api_url="http://localhost:8888", store_conversations=True)
         set_defaults(bank_id="test-agent")
         enable()
 
+        # Create a fake stream (no .choices attribute)
         class FakeStreamWrapper:
             pass
 
@@ -724,13 +734,70 @@ class TestStreamingResponseHandling:
 
         with patch("litellm.completion", return_value=fake_stream):
             import hindsight_litellm
-            # Call with stream=True - should not crash on storage
             response = hindsight_litellm.completion(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": "Hello"}],
                 stream=True,
             )
-            assert response is fake_stream
+            # Should return a stream wrapper, not the raw stream
+            assert isinstance(response, _LiteLLMStreamWrapper)
+
+    def test_stream_wrapper_yields_all_chunks(self):
+        """Test that _LiteLLMStreamWrapper passes through all chunks."""
+        from hindsight_litellm import _LiteLLMStreamWrapper
+
+        configure(hindsight_api_url="http://localhost:8888", store_conversations=False)
+        set_defaults(bank_id="test-agent")
+
+        chunks = self._make_fake_chunks()
+        messages = [{"role": "user", "content": "Hello"}]
+
+        wrapper = _LiteLLMStreamWrapper(iter(chunks), messages, "gpt-4o-mini")
+
+        collected = list(wrapper)
+        assert len(collected) == 4
+
+    def test_stream_wrapper_stores_conversation_on_exhaustion(self):
+        """Test that _LiteLLMStreamWrapper stores conversation when stream is consumed."""
+        from unittest.mock import patch
+        from hindsight_litellm import _LiteLLMStreamWrapper
+
+        configure(hindsight_api_url="http://localhost:8888", store_conversations=True)
+        set_defaults(bank_id="test-agent")
+
+        chunks = self._make_fake_chunks()
+        messages = [{"role": "user", "content": "Hello"}]
+
+        wrapper = _LiteLLMStreamWrapper(iter(chunks), messages, "gpt-4o-mini")
+
+        with patch("hindsight_litellm._store_conversation_from_text") as mock_store:
+            # Consume all chunks
+            list(wrapper)
+
+            mock_store.assert_called_once()
+            stored_text = mock_store.call_args[0][0]
+            assert "USER: Hello" in stored_text
+            assert "ASSISTANT: Hello world!" in stored_text
+
+    def test_stream_wrapper_stores_on_context_manager_exit(self):
+        """Test that _LiteLLMStreamWrapper stores conversation on context manager exit."""
+        from unittest.mock import patch
+        from hindsight_litellm import _LiteLLMStreamWrapper
+
+        configure(hindsight_api_url="http://localhost:8888", store_conversations=True)
+        set_defaults(bank_id="test-agent")
+
+        chunks = self._make_fake_chunks()
+        messages = [{"role": "user", "content": "Hello"}]
+
+        wrapper = _LiteLLMStreamWrapper(iter(chunks), messages, "gpt-4o-mini")
+
+        with patch("hindsight_litellm._store_conversation_from_text") as mock_store:
+            with wrapper:
+                for _ in wrapper:
+                    pass
+            # Should store exactly once (not double-store)
+            mock_store.assert_called_once()
 
     def test_callback_log_success_with_stream_response(self):
         """Test that HindsightCallback.log_success_event handles stream responses."""
