@@ -2584,10 +2584,10 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter by status: pending, completed, or failed",
+              "description": "Filter by status: pending, processing, completed, or failed",
               "title": "Status"
             },
-            "description": "Filter by status: pending, completed, or failed"
+            "description": "Filter by status: pending, processing, completed, or failed"
           },
           {
             "name": "type",
