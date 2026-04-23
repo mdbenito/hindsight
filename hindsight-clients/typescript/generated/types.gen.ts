@@ -4812,7 +4812,7 @@ export type ListOperationsData = {
     /**
      * Status
      *
-     * Filter by status: pending, completed, or failed
+     * Filter by status: pending, processing, completed, or failed
      */
     status?: string | null;
     /**

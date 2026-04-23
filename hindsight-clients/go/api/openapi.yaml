@@ -1761,7 +1761,7 @@ paths:
           title: Bank Id
           type: string
         style: simple
-      - description: "Filter by status: pending, completed, or failed"
+      - description: "Filter by status: pending, processing, completed, or failed"
         explode: true
         in: query
         name: status
