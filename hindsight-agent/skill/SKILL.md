@@ -53,6 +53,23 @@ Use recall when:
 - You're looking for evidence to support a recommendation
 - You want to check what reference documents say about a topic
 
+## Ingesting documents
+
+Upload content directly into your memory without needing to say it in conversation. Use this for reference docs, research, data, or anything you want indexed.
+
+```bash
+# From a file
+hindsight-agent ingest-document {{AGENT_ID}} "Document Title" -f /path/to/file.md
+
+# Inline
+hindsight-agent ingest-document {{AGENT_ID}} "Document Title" -c "content here..."
+
+# From stdin (e.g., pipe from another command)
+cat data.txt | hindsight-agent ingest-document {{AGENT_ID}} "Document Title"
+```
+
+The title is used as the document ID — re-ingesting the same title replaces the previous version.
+
 ## Listing reference documents
 
 ```bash
