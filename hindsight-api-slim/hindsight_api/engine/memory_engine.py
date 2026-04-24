@@ -31,6 +31,7 @@ from ..config import (
     DEFAULT_REFLECT_SOURCE_FACTS_MAX_TOKENS,
     get_config,
 )
+from ..db_url import to_libpq_url
 from ..metrics import get_metrics_collector
 from ..tracing import create_operation_span
 from ..utils import mask_network_location
@@ -1127,10 +1128,10 @@ class MemoryEngine(MemoryEngineInterface):
                 backend = await self._get_backend()
                 async with acquire_with_retry(backend) as conn:
                     result = await conn.fetchrow(
-                        f"SELECT operation_id FROM {fq_table('async_operations')} WHERE operation_id = $1",
+                        f"SELECT status FROM {fq_table('async_operations')} WHERE operation_id = $1",
                         uuid.UUID(operation_id),
                     )
-                    if not result:
+                    if not result or result["status"] == "cancelled":
                         # Operation was cancelled, skip processing
                         logger.info(f"Skipping cancelled operation: {operation_id}")
                         return
@@ -1430,19 +1431,19 @@ class MemoryEngine(MemoryEngineInterface):
             logger.error(f"Failed to delete async operation record {operation_id}: {e}")
 
     async def _check_op_alive(self, operation_id: str) -> bool:
-        """Return False if the operation row no longer exists (e.g. bank was deleted via CASCADE).
+        """Return False if the operation was cancelled or no longer exists (e.g. bank deleted via CASCADE).
 
         Long-running operations should call this at natural checkpoints (e.g. after each
-        committed batch) to detect bank deletion early and abort cleanly.
+        committed batch) to detect cancellation or bank deletion early and abort cleanly.
         """
         try:
             backend = await self._get_backend()
             async with acquire_with_retry(backend) as conn:
                 row = await conn.fetchrow(
-                    f"SELECT operation_id FROM {fq_table('async_operations')} WHERE operation_id = $1",
+                    f"SELECT status FROM {fq_table('async_operations')} WHERE operation_id = $1",
                     uuid.UUID(operation_id),
                 )
-                return row is not None
+                return row is not None and row["status"] != "cancelled"
         except Exception as e:
             logger.error(f"Failed to check operation liveness {operation_id}: {e}")
             return True  # Assume alive on DB error to avoid false-positive aborts
@@ -3716,10 +3717,15 @@ class MemoryEngine(MemoryEngineInterface):
                 f"""
                 SELECT d.id, d.bank_id, d.original_text, d.content_hash,
                        d.created_at, d.updated_at, d.tags, d.retain_params,
-                       (SELECT COUNT(*) FROM {fq_table("memory_units")} mu
-                        WHERE mu.document_id = d.id) as unit_count
+                       COUNT(mu.id) as unit_count,
+                       COUNT(mu.id) FILTER (WHERE mu.fact_type = 'world') as world_count,
+                       COUNT(mu.id) FILTER (WHERE mu.fact_type = 'experience') as experience_count,
+                       COUNT(mu.id) FILTER (WHERE mu.fact_type = 'observation') as observation_count
                 FROM {fq_table("documents")} d
+                LEFT JOIN {fq_table("memory_units")} mu ON mu.document_id = d.id AND mu.bank_id = d.bank_id
                 WHERE d.id = $1 AND d.bank_id = $2
+                GROUP BY d.id, d.bank_id, d.original_text, d.content_hash,
+                         d.created_at, d.updated_at, d.tags, d.retain_params
                 """,
                 document_id,
                 bank_id,
@@ -3739,6 +3745,11 @@ class MemoryEngine(MemoryEngineInterface):
                 "original_text": doc["original_text"],
                 "content_hash": doc["content_hash"],
                 "memory_unit_count": doc["unit_count"],
+                "nodes_by_fact_type": {
+                    "world": doc["world_count"],
+                    "experience": doc["experience_count"],
+                    "observation": doc["observation_count"],
+                },
                 "created_at": doc["created_at"].isoformat() if doc["created_at"] else None,
                 "updated_at": doc["updated_at"].isoformat() if doc["updated_at"] else None,
                 "tags": list(doc["tags"]) if doc["tags"] else [],
@@ -4370,6 +4381,8 @@ class MemoryEngine(MemoryEngineInterface):
         q: str | None = None,
         tags: list[str] | None = None,
         tags_match: str = "all_strict",
+        document_id: str | None = None,
+        chunk_id: str | None = None,
         request_context: "RequestContext",
     ):
         """
@@ -4382,6 +4395,8 @@ class MemoryEngine(MemoryEngineInterface):
             q: Full-text search query (searches text and context fields)
             tags: Filter by tags
             tags_match: Tag matching mode (default: all_strict)
+            document_id: Filter by document ID
+            chunk_id: Filter by chunk ID
             request_context: Request context for authentication.
 
         Returns:
@@ -4409,6 +4424,16 @@ class MemoryEngine(MemoryEngineInterface):
                 param_count += 1
                 query_conditions.append(f"fact_type = ${param_count}")
                 query_params.append(fact_type)
+
+            if document_id:
+                param_count += 1
+                query_conditions.append(f"document_id = ${param_count}")
+                query_params.append(document_id)
+
+            if chunk_id:
+                param_count += 1
+                query_conditions.append(f"chunk_id = ${param_count}")
+                query_params.append(chunk_id)
 
             if q:
                 param_count += 1
@@ -5323,6 +5348,151 @@ class MemoryEngine(MemoryEngineInterface):
                 "chunk_text": chunk["chunk_text"],
                 "created_at": chunk["created_at"].isoformat() if chunk["created_at"] else "",
             }
+
+    async def list_document_chunks(
+        self,
+        bank_id: str,
+        document_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        request_context: "RequestContext",
+    ) -> dict[str, Any]:
+        """
+        List all chunks for a given document, ordered by chunk_index.
+
+        Args:
+            bank_id: Bank ID
+            document_id: Document ID
+            limit: Maximum number of results
+            offset: Offset for pagination
+            request_context: Request context for authentication.
+
+        Returns:
+            Dict with items (list of chunks) and total count
+        """
+        await self._authenticate_tenant(request_context)
+        if self._operation_validator:
+            from hindsight_api.extensions import BankReadContext
+
+            ctx = BankReadContext(bank_id=bank_id, operation="list_document_chunks", request_context=request_context)
+            await self._validate_operation(self._operation_validator.validate_bank_read(ctx))
+        pool = await self._get_pool()
+        async with acquire_with_retry(pool) as conn:
+            # Verify document exists
+            doc = await conn.fetchrow(
+                f"SELECT id FROM {fq_table('documents')} WHERE id = $1 AND bank_id = $2",
+                document_id,
+                bank_id,
+            )
+            if not doc:
+                return None
+
+            count_result = await conn.fetchrow(
+                f"""
+                SELECT COUNT(*) as total
+                FROM {fq_table("chunks")}
+                WHERE document_id = $1 AND bank_id = $2
+                """,
+                document_id,
+                bank_id,
+            )
+            total = count_result["total"]
+
+            chunks = await conn.fetch(
+                f"""
+                SELECT chunk_id, document_id, bank_id, chunk_index, chunk_text, created_at
+                FROM {fq_table("chunks")}
+                WHERE document_id = $1 AND bank_id = $2
+                ORDER BY chunk_index ASC
+                LIMIT $3 OFFSET $4
+                """,
+                document_id,
+                bank_id,
+                limit,
+                offset,
+            )
+
+            items = [
+                {
+                    "chunk_id": row["chunk_id"],
+                    "document_id": row["document_id"],
+                    "bank_id": row["bank_id"],
+                    "chunk_index": row["chunk_index"],
+                    "chunk_text": row["chunk_text"],
+                    "created_at": row["created_at"].isoformat() if row["created_at"] else "",
+                }
+                for row in chunks
+            ]
+
+            return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+    async def reprocess_document(
+        self,
+        bank_id: str,
+        document_id: str,
+        *,
+        request_context: "RequestContext",
+    ) -> dict[str, Any]:
+        """
+        Reprocess a document by re-running retain with its existing content and parameters.
+
+        Args:
+            bank_id: Bank ID
+            document_id: Document ID to reprocess
+            request_context: Request context for authentication.
+
+        Returns:
+            Dict with operation result or None if document not found
+        """
+        await self._authenticate_tenant(request_context)
+        if self._operation_validator:
+            from hindsight_api.extensions import BankWriteContext
+
+            ctx = BankWriteContext(bank_id=bank_id, operation="reprocess_document", request_context=request_context)
+            await self._validate_operation(self._operation_validator.validate_bank_write(ctx))
+
+        # Fetch the document
+        doc = await self.get_document(document_id, bank_id, request_context=request_context)
+        if not doc:
+            return None
+
+        original_text = doc.get("original_text")
+        if not original_text:
+            return None
+
+        # Rebuild the content dict from retain_params
+        retain_params = doc.get("retain_params") or {}
+        content_dict: dict[str, Any] = {
+            "content": original_text,
+            "document_id": document_id,
+            "update_mode": "replace",
+        }
+        if retain_params.get("context"):
+            content_dict["context"] = retain_params["context"]
+        if retain_params.get("event_date"):
+            content_dict["event_date"] = retain_params["event_date"]
+        if retain_params.get("metadata"):
+            content_dict["metadata"] = retain_params["metadata"]
+        if retain_params.get("entities"):
+            content_dict["entities"] = retain_params["entities"]
+
+        tags = doc.get("tags") or []
+        if tags:
+            content_dict["tags"] = tags
+        if retain_params.get("observation_scopes") is not None:
+            content_dict["observation_scopes"] = retain_params["observation_scopes"]
+
+        strategy = retain_params.get("strategy")
+
+        result = await self.submit_async_retain(
+            bank_id,
+            [content_dict],
+            strategy=strategy,
+            request_context=request_context,
+        )
+
+        return result
 
     # ==================== bank profile Methods ====================
 
@@ -6478,7 +6648,10 @@ class MemoryEngine(MemoryEngineInterface):
             )
 
         # Build the canonical bucket list anchored on the most recent UTC boundary.
-        now_utc = datetime.utcnow()
+        # Use tz-aware UTC throughout so serialized ISO strings include a `+00:00`
+        # offset; a naive ISO (`2026-04-18T00:00:00`) would be parsed by browsers
+        # as local time per ECMA-262, producing an off-by-timezone display.
+        now_utc = datetime.now(timezone.utc)
         if cfg.trunc == "minute":
             end = now_utc.replace(second=0, microsecond=0)
         elif cfg.trunc == "hour":
@@ -6495,11 +6668,13 @@ class MemoryEngine(MemoryEngineInterface):
             by_iso[entry.time] = entry
 
         for row in rows:
-            # asyncpg hands us a tz-aware datetime when the column is timestamptz.
-            # Normalize to the naive-UTC format we used for the dict keys.
+            # asyncpg hands us a tz-aware datetime when the column is timestamptz;
+            # ensure UTC so the ISO key matches `by_iso` (also tz-aware UTC).
             bucket_dt = row["bucket"]
-            if bucket_dt.tzinfo is not None:
-                bucket_dt = bucket_dt.astimezone(timezone.utc).replace(tzinfo=None)
+            if bucket_dt.tzinfo is None:
+                bucket_dt = bucket_dt.replace(tzinfo=timezone.utc)
+            else:
+                bucket_dt = bucket_dt.astimezone(timezone.utc)
             entry = by_iso.get(bucket_dt.isoformat())
             if entry is None:
                 # Row fell outside the requested window (clock skew / edge case).
@@ -8039,16 +8214,18 @@ class MemoryEngine(MemoryEngineInterface):
         task_type: str | None = None,
         limit: int = 20,
         offset: int = 0,
+        exclude_parents: bool = False,
         request_context: "RequestContext",
     ) -> dict[str, Any]:
         """List async operations for a bank with optional filtering and pagination.
 
         Args:
             bank_id: Bank identifier
-            status: Optional status filter (pending, completed, failed)
+            status: Optional status filter (pending, processing, completed, failed, cancelled)
             task_type: Optional operation type filter (retain, consolidation, etc.)
             limit: Maximum number of operations to return (default 20)
             offset: Number of operations to skip (default 0)
+            exclude_parents: If True, exclude parent batch operations (is_parent=True in result_metadata)
             request_context: Request context for authentication
 
         Returns:
@@ -8068,16 +8245,15 @@ class MemoryEngine(MemoryEngineInterface):
             params: list[Any] = [bank_id]
 
             if status:
-                # Map API status to DB statuses (pending includes processing)
-                if status == "pending":
-                    where_conditions.append("status IN ('pending', 'processing')")
-                else:
-                    where_conditions.append(f"status = ${len(params) + 1}")
-                    params.append(status)
+                where_conditions.append(f"status = ${len(params) + 1}")
+                params.append(status)
 
             if task_type:
                 where_conditions.append(f"operation_type = ${len(params) + 1}")
                 params.append(task_type)
+
+            if exclude_parents:
+                where_conditions.append("NOT (result_metadata::jsonb @> '{\"is_parent\": true}'::jsonb)")
 
             where_clause = " AND ".join(where_conditions)
 
@@ -8121,7 +8297,7 @@ class MemoryEngine(MemoryEngineInterface):
                         "items_count": result_metadata.get("items_count", 0),
                         "document_id": None,
                         "created_at": row["created_at"].isoformat(),
-                        "status": api_status,
+                        "status": row["status"],
                         "error_message": row["error_message"],
                         "retry_count": row["retry_count"] or 0,
                         "next_retry_at": next_retry_at.isoformat() if next_retry_at else None,
@@ -8181,9 +8357,8 @@ class MemoryEngine(MemoryEngineInterface):
                 raw_tp = row["task_payload"] if include_payload else None
                 task_payload = conn.parse_json(raw_tp) if include_payload else None
 
-                # Use status from database (parent status is updated when all children complete/fail)
-                db_status = row["status"]
-                api_status = "pending" if db_status in ("pending", "processing") else db_status
+                # Status may be corrected by self-healing logic below for parent operations
+                api_status = row["status"]
 
                 # For parent operations, include child operations list
                 if is_parent:
@@ -8305,9 +8480,9 @@ class MemoryEngine(MemoryEngineInterface):
         op_uuid = uuid.UUID(operation_id)
 
         async with acquire_with_retry(backend) as conn:
-            # Check if operation exists and belongs to this memory bank
+            # Check if operation exists, belongs to this bank, and is in a cancellable state
             result = await conn.fetchrow(
-                f"SELECT bank_id FROM {fq_table('async_operations')} WHERE operation_id = $1 AND bank_id = $2",
+                f"SELECT bank_id, status FROM {fq_table('async_operations')} WHERE operation_id = $1 AND bank_id = $2",
                 op_uuid,
                 bank_id,
             )
@@ -8315,8 +8490,19 @@ class MemoryEngine(MemoryEngineInterface):
             if not result:
                 raise ValueError(f"Operation {operation_id} not found for bank {bank_id}")
 
-            # Delete the operation
-            await conn.execute(f"DELETE FROM {fq_table('async_operations')} WHERE operation_id = $1", op_uuid)
+            if result["status"] != "pending":
+                from hindsight_api.extensions import OperationValidationError
+
+                raise OperationValidationError(
+                    f"Operation {operation_id} cannot be cancelled: status is '{result['status']}', only 'pending' operations can be cancelled",
+                    409,
+                )
+
+            # Mark the operation as cancelled
+            await conn.execute(
+                f"UPDATE {fq_table('async_operations')} SET status = 'cancelled', updated_at = now() WHERE operation_id = $1",
+                op_uuid,
+            )
 
             return {
                 "success": True,
@@ -8355,9 +8541,9 @@ class MemoryEngine(MemoryEngineInterface):
             if not row:
                 raise ValueError(f"Operation {operation_id} not found for bank {bank_id}")
 
-            if row["status"] != "failed":
+            if row["status"] not in ("failed", "cancelled"):
                 raise OperationValidationError(
-                    f"Operation {operation_id} cannot be retried: status is '{row['status']}', expected 'failed'",
+                    f"Operation {operation_id} cannot be retried: status is '{row['status']}', expected 'failed' or 'cancelled'",
                     409,
                 )
 

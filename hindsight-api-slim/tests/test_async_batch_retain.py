@@ -8,6 +8,13 @@ import pytest
 
 from hindsight_api.extensions import RequestContext
 
+# These tests submit async operations and rely on the engine-owned worker to
+# drain them. test_worker.py drives its own WorkerPoller.claim_batch() against
+# the same pool, so running the two files on different xdist workers causes
+# them to steal each other's pending rows. Share the "worker_tests" group so
+# they serialize on the same xdist process.
+pytestmark = pytest.mark.xdist_group("worker_tests")
+
 
 async def _ensure_bank(pool, bank_id: str) -> None:
     """Upsert a minimal bank row so FK on async_operations passes."""
@@ -586,7 +593,9 @@ async def test_operation_status_exposes_retry_count_and_next_retry_at(memory, re
     # Get the child op (the batch_retain parent holds a single child in the
     # sync/simplified path used by SyncTaskBackend tests).
     parent_status = await memory.get_operation_status(
-        bank_id=bank_id, operation_id=parent_id, request_context=request_context,
+        bank_id=bank_id,
+        operation_id=parent_id,
+        request_context=request_context,
     )
     assert "retry_count" in parent_status
     assert "next_retry_at" in parent_status
@@ -599,7 +608,10 @@ async def test_operation_status_exposes_retry_count_and_next_retry_at(memory, re
 
     # list_operations also exposes both fields
     listed = await memory.list_operations(
-        bank_id=bank_id, request_context=request_context, limit=10, offset=0,
+        bank_id=bank_id,
+        request_context=request_context,
+        limit=10,
+        offset=0,
     )
     assert listed["operations"], listed
     for op in listed["operations"]:
@@ -619,13 +631,92 @@ async def test_operation_status_exposes_retry_count_and_next_retry_at(memory, re
             uuid.UUID(child_id),
         )
         fetched = await memory.get_operation_status(
-            bank_id=bank_id, operation_id=child_id, request_context=request_context,
+            bank_id=bank_id,
+            operation_id=child_id,
+            request_context=request_context,
         )
         assert fetched["retry_count"] == 2
         assert fetched["next_retry_at"] is not None
         # Round-trip tolerance: within 1 second.
         parsed = datetime.fromisoformat(fetched["next_retry_at"])
         assert abs((parsed - future).total_seconds()) < 1.0
+
+
+@pytest.mark.asyncio
+async def test_list_operations_exclude_parents(memory, request_context):
+    """list_operations with exclude_parents=True hides parent batch operations."""
+    bank_id = "test_exclude_parents"
+    pool = await memory._get_pool()
+    await _ensure_bank(pool, bank_id)
+
+    # Create a parent operation (is_parent=True)
+    parent_id = uuid.uuid4()
+    child_id = uuid.uuid4()
+    standalone_id = uuid.uuid4()
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO async_operations (operation_id, bank_id, operation_type, result_metadata, status)
+            VALUES ($1, $2, $3, $4, $5)
+            """,
+            parent_id,
+            bank_id,
+            "batch_retain",
+            json.dumps({"items_count": 10, "num_sub_batches": 1, "is_parent": True}),
+            "completed",
+        )
+        await conn.execute(
+            """
+            INSERT INTO async_operations (operation_id, bank_id, operation_type, result_metadata, status)
+            VALUES ($1, $2, $3, $4, $5)
+            """,
+            child_id,
+            bank_id,
+            "retain",
+            json.dumps(
+                {"items_count": 10, "parent_operation_id": str(parent_id), "sub_batch_index": 1, "total_sub_batches": 1}
+            ),
+            "completed",
+        )
+        await conn.execute(
+            """
+            INSERT INTO async_operations (operation_id, bank_id, operation_type, result_metadata, status)
+            VALUES ($1, $2, $3, $4, $5)
+            """,
+            standalone_id,
+            bank_id,
+            "consolidation",
+            json.dumps({}),
+            "completed",
+        )
+
+    # Without exclude_parents: all 3 operations visible
+    all_ops = await memory.list_operations(
+        bank_id=bank_id,
+        request_context=request_context,
+        limit=10,
+        offset=0,
+    )
+    all_ids = {op["id"] for op in all_ops["operations"]}
+    assert str(parent_id) in all_ids
+    assert str(child_id) in all_ids
+    assert str(standalone_id) in all_ids
+    assert all_ops["total"] == 3
+
+    # With exclude_parents: parent is hidden
+    filtered_ops = await memory.list_operations(
+        bank_id=bank_id,
+        request_context=request_context,
+        limit=10,
+        offset=0,
+        exclude_parents=True,
+    )
+    filtered_ids = {op["id"] for op in filtered_ops["operations"]}
+    assert str(parent_id) not in filtered_ids
+    assert str(child_id) in filtered_ids
+    assert str(standalone_id) in filtered_ids
+    assert filtered_ops["total"] == 2
 
 
 @pytest.mark.asyncio
@@ -674,8 +765,7 @@ async def test_request_context_retry_count_propagated_to_validator(memory_no_llm
     await memory_no_llm_verify._handle_batch_retain(task_dict)
 
     assert captured["retry_count"] == 3, (
-        "Validator should see retry_count=3 from task_dict['_retry_count']; "
-        f"got {captured['retry_count']}"
+        f"Validator should see retry_count=3 from task_dict['_retry_count']; got {captured['retry_count']}"
     )
 
     # Default (missing _retry_count key) must surface as 0, not raise.

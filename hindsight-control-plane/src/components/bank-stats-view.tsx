@@ -219,8 +219,17 @@ function formatRelativeTime(ts: string | null): string {
   return `${days}d ago`;
 }
 
+// Bucket timestamps arrive from the memories-timeseries endpoint, which is
+// canonically UTC. An ISO string without an explicit offset (e.g. `2026-04-18T00:00:00`)
+// would be parsed by `new Date()` as *local* time per ECMA-262, shifting the
+// displayed bucket by the browser's timezone. Append `Z` when the offset is
+// missing so we always anchor to UTC before converting to the user's locale.
+function parseBucketIso(iso: string): Date {
+  return new Date(/[+Z-]$/.test(iso) || /[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`);
+}
+
 function formatBucketLabel(iso: string, trunc: string): string {
-  const d = new Date(iso);
+  const d = parseBucketIso(iso);
   if (trunc === "day") {
     return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   }
@@ -228,7 +237,7 @@ function formatBucketLabel(iso: string, trunc: string): string {
 }
 
 function formatBucketTooltip(iso: string, trunc: string): string {
-  const d = new Date(iso);
+  const d = parseBucketIso(iso);
   if (trunc === "day") {
     return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
   }
@@ -365,20 +374,20 @@ function InlineStat({
   );
 }
 
-const OPS_STATUS_ORDER = ["completed", "in_progress", "pending", "failed", "cancelled"] as const;
+const OPS_STATUS_ORDER = ["completed", "processing", "pending", "failed", "cancelled"] as const;
 const OPS_STATUS_COLORS: Record<string, string> = {
-  completed: CHART_COLORS.success,
-  in_progress: CHART_COLORS.semantic,
-  pending: CHART_COLORS.warning,
-  failed: CHART_COLORS.danger,
-  cancelled: CHART_COLORS.mutedFg,
+  completed: "#10b981", // emerald-500
+  processing: "#3b82f6", // blue-500
+  pending: "#f59e0b", // amber-500
+  failed: "#ef4444", // red-500
+  cancelled: "#6b7280", // gray-500
 };
 const OPS_STATUS_LABELS: Record<string, string> = {
-  completed: "Completed",
-  in_progress: "In progress",
-  pending: "Pending",
-  failed: "Failed",
-  cancelled: "Cancelled",
+  completed: "completed",
+  processing: "processing",
+  pending: "pending",
+  failed: "failed",
+  cancelled: "cancelled",
 };
 
 interface OpsStatusEntry {
