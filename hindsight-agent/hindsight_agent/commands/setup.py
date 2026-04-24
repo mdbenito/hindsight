@@ -292,7 +292,6 @@ def _manually_configure_openclaw_plugin(openclaw_config: Path) -> None:
 def _setup_hermes(agent_id: str, workspace: Path) -> None:
     """Install the hindsight-agent memory plugin into Hermes."""
     hermes_home = Path.home() / ".hermes"
-    plugin_dest = hermes_home / "plugins" / "hindsight-agent"
 
     if not HERMES_PLUGIN_DIR.exists():
         raise click.ClickException(
@@ -300,18 +299,28 @@ def _setup_hermes(agent_id: str, workspace: Path) -> None:
             "Make sure you're running from the hindsight-agent repo."
         )
 
-    # Copy plugin files
+    # Memory plugins live in the hermes-agent repo checkout, not ~/.hermes/plugins/
+    plugin_dest = hermes_home / "hermes-agent" / "plugins" / "memory" / "hindsight_agent"
     plugin_dest.mkdir(parents=True, exist_ok=True)
     for src_file in HERMES_PLUGIN_DIR.iterdir():
         if src_file.is_file():
             shutil.copy2(src_file, plugin_dest / src_file.name)
+
+    # Fix plugin name to match directory (no hyphens)
+    plugin_yaml = plugin_dest / "plugin.yaml"
+    if plugin_yaml.exists():
+        text = plugin_yaml.read_text()
+        text = text.replace("name: hindsight-agent", "name: hindsight_agent")
+        plugin_yaml.write_text(text)
+
     click.echo(f"  Retain plugin installed to {plugin_dest}")
 
-    # Configure Hermes to use hindsight-agent as memory provider
-    config_path = hermes_home / "config.yaml"
-    if config_path.exists():
-        config_text = config_path.read_text()
-        if "hindsight-agent" not in config_text:
-            click.echo("  Note: Set memory provider with: hermes config set memory.provider hindsight-agent")
+    # Set the memory provider
+    result = subprocess.run(
+        ["hermes", "config", "set", "memory.provider", "hindsight_agent"],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        click.echo("  Memory provider set to hindsight_agent")
     else:
-        click.echo("  Note: Set memory provider with: hermes config set memory.provider hindsight-agent")
+        click.echo("  Note: Set memory provider with: hermes config set memory.provider hindsight_agent")

@@ -38,6 +38,17 @@ def _load_agent_config(agent_id: str) -> dict | None:
         return None
 
 
+def _load_all_agents() -> dict:
+    """Load all agents from ~/.hindsight-agent/config.json."""
+    if not CONFIG_PATH.exists():
+        return {}
+    try:
+        data = json.loads(CONFIG_PATH.read_text())
+        return data.get("agents", {})
+    except Exception:
+        return {}
+
+
 class HindsightAgentProvider(MemoryProvider):
     """Retain-only memory provider that delegates to hindsight-agent config."""
 
@@ -50,7 +61,7 @@ class HindsightAgentProvider(MemoryProvider):
 
     @property
     def name(self) -> str:
-        return "hindsight-agent"
+        return "hindsight_agent"
 
     def is_available(self) -> bool:
         return CONFIG_PATH.exists()
@@ -60,21 +71,38 @@ class HindsightAgentProvider(MemoryProvider):
         self._session_turns = []
 
         # Resolve agent ID from Hermes context
-        # Hermes provides agent_identity (profile name) in kwargs
-        agent_identity = kwargs.get("agent_identity", "hermes")
-        self._agent_id = agent_identity
+        # Try agent_identity first, then fall back to checking all configured agents
+        agent_identity = kwargs.get("agent_identity", "")
+        logger.info("[hindsight_agent] initialize: session=%s agent_identity=%s kwargs=%s",
+                    session_id, agent_identity, list(kwargs.keys()))
 
-        self._config = _load_agent_config(self._agent_id)
+        self._config = None
+        self._agent_id = None
+
+        # Try exact match first
+        if agent_identity:
+            self._config = _load_agent_config(agent_identity)
+            if self._config:
+                self._agent_id = agent_identity
+
+        # If no exact match, find any hermes-harness agent in the config
+        if not self._config:
+            agents = _load_all_agents()
+            for aid, cfg in agents.items():
+                if cfg.get("harness") == "hermes":
+                    self._config = cfg
+                    self._agent_id = aid
+                    break
+
         if self._config:
             logger.info(
-                "[hindsight-agent] initialized: agent=%s bank=%s",
+                "[hindsight_agent] initialized: agent=%s bank=%s",
                 self._agent_id,
                 self._config.get("bank_id"),
             )
         else:
-            logger.debug(
-                "[hindsight-agent] agent '%s' not in config, retain disabled",
-                self._agent_id,
+            logger.info(
+                "[hindsight_agent] no hermes agent in config, retain disabled",
             )
 
     def system_prompt_block(self) -> str:
@@ -91,13 +119,17 @@ class HindsightAgentProvider(MemoryProvider):
     def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "") -> None:
         """Buffer turns for end-of-session retain."""
         if not self._config:
+            logger.debug("[hindsight_agent] sync_turn: skipped (no config)")
             return
 
         self._session_turns.append({"role": "user", "content": user_content})
         self._session_turns.append({"role": "assistant", "content": assistant_content})
+        logger.info("[hindsight_agent] sync_turn: buffered %d messages", len(self._session_turns))
 
     def on_session_end(self, messages: list | None = None, **kwargs: Any) -> None:
         """Retain the full session to Hindsight (async HTTP POST)."""
+        logger.info("[hindsight_agent] on_session_end: %d buffered turns, config=%s",
+                     len(self._session_turns), bool(self._config))
         if not self._config or not self._session_turns:
             return
 
