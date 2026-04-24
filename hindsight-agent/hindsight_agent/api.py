@@ -82,6 +82,7 @@ class HindsightAPI:
                 "mode": "delta",
                 "refresh_after_consolidation": True,
                 "exclude_mental_models": True,
+                "fact_types": ["observation"],
             },
         }
         if page_id:
