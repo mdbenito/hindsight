@@ -2215,6 +2215,45 @@ jobs:
       working-directory: ./hindsight-embed
       run: ./test.sh
 
+  test-embed-windows:
+    # Windows coverage for hindsight-embed unit tests. We deliberately skip the
+    # smoke test (test.sh) because the daemon uses POSIX-only
+    # subprocess.Popen(start_new_session=True) — making the full daemon
+    # lifecycle Windows-safe is a separate effort. This job exists to exercise
+    # the Windows code paths we *do* have (msvcrt file locking, .exe binary
+    # detection in _find_api_command, netstat-based PID lookup).
+    needs: [detect-changes]
+    if: >-
+      (github.event_name == 'pull_request_review' && github.event.review.state == 'approved') ||
+      github.event_name == 'workflow_dispatch' ||
+      needs.detect-changes.outputs.core == 'true' ||
+      needs.detect-changes.outputs.embed == 'true' ||
+      needs.detect-changes.outputs.ci == 'true'
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        ref: ${{ github.event.pull_request.head.sha || '' }}
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+      with:
+        enable-cache: true
+        prune-cache: false
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version-file: ".python-version"
+
+    - name: Install dependencies
+      working-directory: ./hindsight-embed
+      run: uv sync --frozen --index-strategy unsafe-best-match
+
+    - name: Run unit tests
+      working-directory: ./hindsight-embed
+      run: uv run pytest tests/ -v
+
   test-hindsight-all:
     needs: [detect-changes]
     if: >-
@@ -2746,6 +2785,7 @@ jobs:
       - test-llamaindex-integration
       - test-pip-slim
       - test-embed
+      - test-embed-windows
       - test-hindsight-all
       - test-doc-examples
       - test-upgrade
