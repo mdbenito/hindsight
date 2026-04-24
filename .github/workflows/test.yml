@@ -2288,6 +2288,39 @@ jobs:
       working-directory: ./hindsight-embed
       run: uv run pytest tests/ -v
 
+    # Smoke test's retain/recall commands delegate to the Rust hindsight CLI.
+    # On POSIX, hindsight-embed auto-installs the CLI via curl|bash; on
+    # Windows that installer isn't available (and `bash` on windows-latest
+    # routes to WSL which isn't provisioned). Build the CLI from source and
+    # drop it into ~/.local/bin where find_cli_binary() looks first.
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache cargo build
+      uses: actions/cache@v5
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          hindsight-cli/target
+        key: ${{ runner.os }}-cargo-embed-smoke-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-embed-smoke-
+          ${{ runner.os }}-cargo-
+
+    - name: Build hindsight CLI
+      working-directory: ./hindsight-cli
+      run: cargo build --release
+
+    - name: Stage hindsight CLI where find_cli_binary expects it
+      shell: bash
+      run: |
+        set -euo pipefail
+        install_dir="$HOME/.local/bin"
+        mkdir -p "$install_dir"
+        cp hindsight-cli/target/release/hindsight.exe "$install_dir/hindsight.exe"
+        "$install_dir/hindsight.exe" --version
+
     - name: Run smoke test
       shell: bash
       working-directory: ./hindsight-embed
