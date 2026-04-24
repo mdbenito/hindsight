@@ -42,10 +42,10 @@ def get_page(agent_id: str, page_id: str) -> None:
 
 @pages.command("create")
 @click.argument("agent_id")
+@click.argument("page_id")
 @click.argument("name")
 @click.argument("source_query")
-@click.option("--id", "page_id", default=None, help="Custom page ID (auto-generated if omitted)")
-def create_page(agent_id: str, name: str, source_query: str, page_id: str | None) -> None:
+def create_page(agent_id: str, page_id: str, name: str, source_query: str) -> None:
     """Create a new knowledge page.
 
     NAME is the page title.

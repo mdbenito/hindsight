@@ -83,13 +83,10 @@ This shows what content has been retained into your memory — reference documen
 When you discover a recurring topic worth tracking across sessions — user preferences, a procedure that works, performance data — create a page for it. Use your judgment.
 
 ```bash
-hindsight-agent pages create {{AGENT_ID}} "<Page Name>" "<source_query>"
+hindsight-agent pages create {{AGENT_ID}} <page-id> "<Page Name>" "<source_query>"
 ```
 
-Or with a custom ID:
-```bash
-hindsight-agent pages create {{AGENT_ID}} "<Page Name>" "<source_query>" --id <page-id>
-```
+The page ID must be lowercase with hyphens (e.g., `seo-best-practices`, `editorial-preferences`).
 
 **The `source_query` is the key field.** It's a question the system will re-ask on every consolidation to rebuild the page content from your accumulated observations. Write it using the patterns below.
 
