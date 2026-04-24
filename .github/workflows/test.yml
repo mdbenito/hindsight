@@ -2331,25 +2331,32 @@ jobs:
     # or NixOS) and verify the sibling binary is discovered (not the uvx
     # fallback). Exercises a different code path than the smoke test, which
     # uses `uv run --project` via the monorepo branch of _find_api_command.
+    #
+    # IMPORTANT: install outside the repo checkout. `_find_api_command` first
+    # probes `<pkg>/../../hindsight-api-slim` for dev mode; if the target dir
+    # lives inside the monorepo, that branch matches and we never exercise
+    # the sibling-binary path we actually want to test.
     - name: Install hindsight-embed and hindsight-api into --target directory
       shell: bash
       run: |
         set -euo pipefail
-        rm -rf install-test
-        mkdir install-test
-        uv pip install --target install-test ./hindsight-embed ./hindsight-api-slim
+        target="$RUNNER_TEMP/install-test"
+        rm -rf "$target"
+        mkdir -p "$target"
+        uv pip install --target "$target" ./hindsight-embed ./hindsight-api-slim
 
     - name: Verify sibling hindsight-api.exe is present
       shell: bash
       run: |
         set -euo pipefail
-        if [ -f install-test/Scripts/hindsight-api.exe ]; then
-          echo "Found install-test/Scripts/hindsight-api.exe"
-        elif [ -f install-test/bin/hindsight-api.exe ]; then
-          echo "Found install-test/bin/hindsight-api.exe"
+        target="$RUNNER_TEMP/install-test"
+        if [ -f "$target/Scripts/hindsight-api.exe" ]; then
+          echo "Found $target/Scripts/hindsight-api.exe"
+        elif [ -f "$target/bin/hindsight-api.exe" ]; then
+          echo "Found $target/bin/hindsight-api.exe"
         else
           echo "::error::hindsight-api.exe not found in install target"
-          ls install-test/
+          ls "$target/"
           exit 1
         fi
 
@@ -2357,7 +2364,8 @@ jobs:
       shell: bash
       run: |
         set -euo pipefail
-        PYTHONPATH=install-test python -c "
+        target="$RUNNER_TEMP/install-test"
+        PYTHONPATH="$target" python -c "
         from hindsight_embed.daemon_embed_manager import DaemonEmbedManager
         cmd = DaemonEmbedManager()._find_api_command()
         print('Resolved command:', cmd)
@@ -2369,14 +2377,14 @@ jobs:
 
     - name: Smoke-check installed hindsight-embed binary runs
       shell: bash
-      env:
-        PYTHONPATH: install-test
       run: |
         set -euo pipefail
-        if [ -f install-test/Scripts/hindsight-embed.exe ]; then
-          install-test/Scripts/hindsight-embed.exe --help
+        target="$RUNNER_TEMP/install-test"
+        export PYTHONPATH="$target"
+        if [ -f "$target/Scripts/hindsight-embed.exe" ]; then
+          "$target/Scripts/hindsight-embed.exe" --help
         else
-          install-test/bin/hindsight-embed.exe --help
+          "$target/bin/hindsight-embed.exe" --help
         fi
 
     - name: Collect daemon logs on failure
