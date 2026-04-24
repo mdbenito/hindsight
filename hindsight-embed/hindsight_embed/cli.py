@@ -1353,6 +1353,17 @@ def do_profile_command(args: list[str]) -> int:
 
 def main():
     """Main entry point."""
+    # Windows defaults stdout/stderr to the legacy cp1252 codec, which crashes
+    # on the Unicode glyphs (✓, box-drawing, etc.) used throughout Rich-rendered
+    # output. Reconfigure to UTF-8 before the first print. `errors="replace"`
+    # keeps the CLI from dying on an unexpected character (e.g. a redirected
+    # pipe) — glyphs that can't be rendered become '?' rather than raising.
+    if sys.platform == "win32":
+        for stream in (sys.stdout, sys.stderr):
+            reconfigure = getattr(stream, "reconfigure", None)
+            if reconfigure is not None:
+                reconfigure(encoding="utf-8", errors="replace")
+
     # Use argparse to properly parse global flags
     # Create a parent parser for global --profile/-p flag
     parent_parser = argparse.ArgumentParser(add_help=False)

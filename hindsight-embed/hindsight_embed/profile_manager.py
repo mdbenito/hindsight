@@ -50,10 +50,19 @@ if sys.platform != "win32":
 else:
     import msvcrt
 
+    # msvcrt.locking(fd, mode, N) locks N bytes starting at the *current* file
+    # position, and LK_UNLCK must be called with the file pointer positioned
+    # at the start of the same region. Callers typically lock immediately
+    # after `open(..., "w")` (position 0), then write JSON (advancing the
+    # position), then unlock — at which point the unlock request targets a
+    # byte past the data and Windows returns EACCES. Seek to 0 on both sides
+    # so lock and unlock always act on byte 0.
     def lock_file(file_obj):
+        file_obj.seek(0)
         msvcrt.locking(file_obj.fileno(), msvcrt.LK_LOCK, 1)
 
     def unlock_file(file_obj):
+        file_obj.seek(0)
         msvcrt.locking(file_obj.fileno(), msvcrt.LK_UNLCK, 1)
 
 
