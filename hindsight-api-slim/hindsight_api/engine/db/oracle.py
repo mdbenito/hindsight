@@ -57,7 +57,7 @@ _PG_PARAM_RE = re.compile(r"\$(\d+)")
 _PG_CAST_RE = re.compile(
     r"::(?:jsonb|json|text\[\]|text|uuid\[\]|uuid|varchar\[\]|varchar|"
     r"timestamptz\[\]|timestamptz|interval|vector\[\]|vector|"
-    r"integer\[\]|integer|bigint|float|numeric|boolean)"
+    r"integer\[\]|integer|int|bigint|float|numeric|boolean)"
 )
 
 # Match ON CONFLICT [(...)] DO NOTHING — column list is optional
@@ -382,34 +382,68 @@ def _rewrite_pg_to_oracle(query: str) -> RewriteResult:
 
     # LIMIT/OFFSET rewriting: PG uses "LIMIT N OFFSET M" or "LIMIT N" or "OFFSET M LIMIT N"
     # Oracle uses "OFFSET M ROWS FETCH FIRST N ROWS ONLY" (OFFSET before FETCH FIRST)
-    # First handle "LIMIT N OFFSET M" → "OFFSET M ROWS FETCH FIRST N ROWS ONLY"
-    query = re.sub(
-        r"\bLIMIT\s+(\d+|:\w+)\s+OFFSET\s+(\d+|:\w+)\b",
-        r"OFFSET \2 ROWS FETCH FIRST \1 ROWS ONLY",
-        query,
-        flags=re.IGNORECASE,
-    )
-    # Handle "OFFSET M LIMIT N" → "OFFSET M ROWS FETCH FIRST N ROWS ONLY"
-    query = re.sub(
-        r"\bOFFSET\s+(\d+|:\w+)\s+LIMIT\s+(\d+|:\w+)\b",
-        r"OFFSET \1 ROWS FETCH FIRST \2 ROWS ONLY",
-        query,
-        flags=re.IGNORECASE,
-    )
-    # Handle standalone "LIMIT N" (no OFFSET)
-    query = re.sub(
-        r"\bLIMIT\s+(\d+|:\w+)\b",
-        r"FETCH FIRST \1 ROWS ONLY",
-        query,
-        flags=re.IGNORECASE,
-    )
-    # Handle standalone "OFFSET N" (no LIMIT, less common)
-    query = re.sub(
-        r"\bOFFSET\s+(\d+|:\w+)\b(?!\s+ROWS)",
-        r"OFFSET \1 ROWS",
-        query,
-        flags=re.IGNORECASE,
-    )
+    #
+    # IMPORTANT: Oracle does NOT allow FETCH FIRST with FOR UPDATE (ORA-02014 — treats
+    # the row-limiting clause as an inline view). When FOR UPDATE is present, we must use
+    # ROWNUM in the WHERE clause instead. This is safe because FOR UPDATE + LIMIT queries
+    # in the poller are simple single-table SELECTs with no OFFSET.
+    has_for_update = bool(re.search(r"\bFOR\s+UPDATE\b", query, re.IGNORECASE))
+
+    if has_for_update:
+        # FOR UPDATE path: use ROWNUM instead of FETCH FIRST.
+        # Extract and remove LIMIT clause, inject ROWNUM into WHERE.
+        def _limit_to_rownum(m):
+            return ""  # Remove the LIMIT clause; we'll add ROWNUM below
+
+        limit_val = None
+        limit_match = re.search(r"\bLIMIT\s+(\d+|:\w+)\b", query, re.IGNORECASE)
+        if limit_match:
+            limit_val = limit_match.group(1)
+            query = re.sub(r"\bLIMIT\s+(\d+|:\w+)\b", "", query, flags=re.IGNORECASE)
+
+        # Remove OFFSET if present (not expected with FOR UPDATE, but be safe)
+        query = re.sub(r"\bOFFSET\s+(\d+|:\w+)\b(?!\s+ROWS)", "", query, flags=re.IGNORECASE)
+
+        # Inject ROWNUM constraint into WHERE clause
+        if limit_val is not None:
+            # Insert ROWNUM <= N right after WHERE
+            query = re.sub(
+                r"\bWHERE\b",
+                f"WHERE ROWNUM <= {limit_val} AND",
+                query,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+    else:
+        # No FOR UPDATE: use standard FETCH FIRST / OFFSET ROWS syntax
+        # First handle "LIMIT N OFFSET M" → "OFFSET M ROWS FETCH FIRST N ROWS ONLY"
+        query = re.sub(
+            r"\bLIMIT\s+(\d+|:\w+)\s+OFFSET\s+(\d+|:\w+)\b",
+            r"OFFSET \2 ROWS FETCH FIRST \1 ROWS ONLY",
+            query,
+            flags=re.IGNORECASE,
+        )
+        # Handle "OFFSET M LIMIT N" → "OFFSET M ROWS FETCH FIRST N ROWS ONLY"
+        query = re.sub(
+            r"\bOFFSET\s+(\d+|:\w+)\s+LIMIT\s+(\d+|:\w+)\b",
+            r"OFFSET \1 ROWS FETCH FIRST \2 ROWS ONLY",
+            query,
+            flags=re.IGNORECASE,
+        )
+        # Handle standalone "LIMIT N" (no OFFSET)
+        query = re.sub(
+            r"\bLIMIT\s+(\d+|:\w+)\b",
+            r"FETCH FIRST \1 ROWS ONLY",
+            query,
+            flags=re.IGNORECASE,
+        )
+        # Handle standalone "OFFSET N" (no LIMIT, less common)
+        query = re.sub(
+            r"\bOFFSET\s+(\d+|:\w+)\b(?!\s+ROWS)",
+            r"OFFSET \1 ROWS",
+            query,
+            flags=re.IGNORECASE,
+        )
 
     # PG non-empty array check: tags != '{}' → Oracle: NOT (DBMS_LOB empty check)
     query = re.sub(

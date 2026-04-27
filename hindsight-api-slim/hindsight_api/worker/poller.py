@@ -429,26 +429,49 @@ class WorkerPoller:
                         continue
 
                     if op_type == "consolidation":
-                        rows = await conn.fetch(
+                        # Two-step claim: Oracle doesn't allow FOR UPDATE with
+                        # NOT EXISTS subqueries (ORA-02014). First find banks
+                        # with active consolidation, then claim excluding those.
+                        busy_banks = await conn.fetch(
                             f"""
-                            SELECT operation_id, operation_type, task_payload, retry_count
-                            FROM {table} AS pending
-                            WHERE status = 'pending'
-                              AND task_payload IS NOT NULL
-                              AND operation_type = 'consolidation'
-                              AND (next_retry_at IS NULL OR next_retry_at <= NOW())
-                              AND NOT EXISTS (
-                                  SELECT 1 FROM {table} AS processing
-                                  WHERE processing.bank_id = pending.bank_id
-                                    AND processing.operation_type = 'consolidation'
-                                    AND processing.status = 'processing'
-                              )
-                            ORDER BY created_at
-                            LIMIT $1
-                            FOR UPDATE SKIP LOCKED
+                            SELECT DISTINCT bank_id FROM {table}
+                            WHERE operation_type = 'consolidation' AND status = 'processing'
                             """,
-                            limit,
                         )
+                        busy_bank_ids = [r["bank_id"] for r in busy_banks]
+
+                        if busy_bank_ids:
+                            rows = await conn.fetch(
+                                f"""
+                                SELECT operation_id, operation_type, task_payload, retry_count
+                                FROM {table}
+                                WHERE status = 'pending'
+                                  AND task_payload IS NOT NULL
+                                  AND operation_type = 'consolidation'
+                                  AND (next_retry_at IS NULL OR next_retry_at <= NOW())
+                                  AND bank_id != ALL($1::text[])
+                                ORDER BY created_at
+                                LIMIT $2
+                                FOR UPDATE SKIP LOCKED
+                                """,
+                                busy_bank_ids,
+                                limit,
+                            )
+                        else:
+                            rows = await conn.fetch(
+                                f"""
+                                SELECT operation_id, operation_type, task_payload, retry_count
+                                FROM {table}
+                                WHERE status = 'pending'
+                                  AND task_payload IS NOT NULL
+                                  AND operation_type = 'consolidation'
+                                  AND (next_retry_at IS NULL OR next_retry_at <= NOW())
+                                ORDER BY created_at
+                                LIMIT $1
+                                FOR UPDATE SKIP LOCKED
+                                """,
+                                limit,
+                            )
                     else:
                         rows = await conn.fetch(
                             f"""
@@ -513,51 +536,88 @@ class WorkerPoller:
                     remaining_shared -= len(rows)
 
                     # 2b. Consolidation tasks (with bank-serialization constraint)
+                    # Two-step claim: Oracle doesn't allow FOR UPDATE with
+                    # NOT EXISTS subqueries (ORA-02014). Reuse busy_banks
+                    # from Phase 1 if available, otherwise query fresh.
                     if remaining_shared > 0:
+                        busy_banks_2 = await conn.fetch(
+                            f"""
+                            SELECT DISTINCT bank_id FROM {table}
+                            WHERE operation_type = 'consolidation' AND status = 'processing'
+                            """,
+                        )
+                        busy_bank_ids_2 = [r["bank_id"] for r in busy_banks_2]
+
                         if claimed_ids:
-                            rows = await conn.fetch(
-                                f"""
-                                SELECT operation_id, operation_type, task_payload, retry_count
-                                FROM {table} AS pending
-                                WHERE status = 'pending'
-                                  AND task_payload IS NOT NULL
-                                  AND operation_type = 'consolidation'
-                                  AND (next_retry_at IS NULL OR next_retry_at <= NOW())
-                                  AND operation_id != ALL($1::uuid[])
-                                  AND NOT EXISTS (
-                                      SELECT 1 FROM {table} AS processing
-                                      WHERE processing.bank_id = pending.bank_id
-                                        AND processing.operation_type = 'consolidation'
-                                        AND processing.status = 'processing'
-                                  )
-                                ORDER BY created_at
-                                LIMIT $2
-                                FOR UPDATE SKIP LOCKED
-                                """,
-                                claimed_ids,
-                                remaining_shared,
-                            )
+                            if busy_bank_ids_2:
+                                rows = await conn.fetch(
+                                    f"""
+                                    SELECT operation_id, operation_type, task_payload, retry_count
+                                    FROM {table}
+                                    WHERE status = 'pending'
+                                      AND task_payload IS NOT NULL
+                                      AND operation_type = 'consolidation'
+                                      AND (next_retry_at IS NULL OR next_retry_at <= NOW())
+                                      AND operation_id != ALL($1::uuid[])
+                                      AND bank_id != ALL($2::text[])
+                                    ORDER BY created_at
+                                    LIMIT $3
+                                    FOR UPDATE SKIP LOCKED
+                                    """,
+                                    claimed_ids,
+                                    busy_bank_ids_2,
+                                    remaining_shared,
+                                )
+                            else:
+                                rows = await conn.fetch(
+                                    f"""
+                                    SELECT operation_id, operation_type, task_payload, retry_count
+                                    FROM {table}
+                                    WHERE status = 'pending'
+                                      AND task_payload IS NOT NULL
+                                      AND operation_type = 'consolidation'
+                                      AND (next_retry_at IS NULL OR next_retry_at <= NOW())
+                                      AND operation_id != ALL($1::uuid[])
+                                    ORDER BY created_at
+                                    LIMIT $2
+                                    FOR UPDATE SKIP LOCKED
+                                    """,
+                                    claimed_ids,
+                                    remaining_shared,
+                                )
                         else:
-                            rows = await conn.fetch(
-                                f"""
-                                SELECT operation_id, operation_type, task_payload, retry_count
-                                FROM {table} AS pending
-                                WHERE status = 'pending'
-                                  AND task_payload IS NOT NULL
-                                  AND operation_type = 'consolidation'
-                                  AND (next_retry_at IS NULL OR next_retry_at <= NOW())
-                                  AND NOT EXISTS (
-                                      SELECT 1 FROM {table} AS processing
-                                      WHERE processing.bank_id = pending.bank_id
-                                        AND processing.operation_type = 'consolidation'
-                                        AND processing.status = 'processing'
-                                  )
-                                ORDER BY created_at
-                                LIMIT $1
-                                FOR UPDATE SKIP LOCKED
-                                """,
-                                remaining_shared,
-                            )
+                            if busy_bank_ids_2:
+                                rows = await conn.fetch(
+                                    f"""
+                                    SELECT operation_id, operation_type, task_payload, retry_count
+                                    FROM {table}
+                                    WHERE status = 'pending'
+                                      AND task_payload IS NOT NULL
+                                      AND operation_type = 'consolidation'
+                                      AND (next_retry_at IS NULL OR next_retry_at <= NOW())
+                                      AND bank_id != ALL($1::text[])
+                                    ORDER BY created_at
+                                    LIMIT $2
+                                    FOR UPDATE SKIP LOCKED
+                                    """,
+                                    busy_bank_ids_2,
+                                    remaining_shared,
+                                )
+                            else:
+                                rows = await conn.fetch(
+                                    f"""
+                                    SELECT operation_id, operation_type, task_payload, retry_count
+                                    FROM {table}
+                                    WHERE status = 'pending'
+                                      AND task_payload IS NOT NULL
+                                      AND operation_type = 'consolidation'
+                                      AND (next_retry_at IS NULL OR next_retry_at <= NOW())
+                                    ORDER BY created_at
+                                    LIMIT $1
+                                    FOR UPDATE SKIP LOCKED
+                                    """,
+                                    remaining_shared,
+                                )
 
                         for row in rows:
                             claimed_ids.append(row["operation_id"])
@@ -579,7 +639,9 @@ class WorkerPoller:
 
                 result = []
                 for row in all_rows:
-                    task_dict = json.loads(row["task_payload"])
+                    payload = row["task_payload"]
+                    # Oracle may return JSON columns as dict directly
+                    task_dict = json.loads(payload) if isinstance(payload, str) else payload
                     task_dict["_retry_count"] = row["retry_count"]
                     task_dict["_operation_id"] = str(row["operation_id"])
                     # The DB column is authoritative for operation_type — inject it

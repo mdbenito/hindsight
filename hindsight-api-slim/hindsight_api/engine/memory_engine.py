@@ -1827,9 +1827,9 @@ class MemoryEngine(MemoryEngineInterface):
                 for tenant in tenants:
                     schema = tenant.schema
                     if schema:
-                        # Non-PG backends use users as schemas; "public" is PG-specific
-                        # and doesn't exist — use None (connecting user's default)
-                        if not self._backend.supports_worker_poller and schema == "public":
+                        # Oracle uses users as schemas; "public" is PG-specific
+                        # and doesn't exist in Oracle — use None (connecting user's default).
+                        if self._backend.backend_type == "oracle" and schema == "public":
                             schema = None
                         self._backend.run_migrations(self.db_url, schema=schema)
                 logger.info("Schema migrations completed")
