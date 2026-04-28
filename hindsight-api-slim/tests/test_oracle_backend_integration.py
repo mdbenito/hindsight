@@ -9,16 +9,14 @@ abstraction is ready to replace raw asyncpg usage.
 Requires:
   - Oracle 23ai instance (local Docker or OCI)
   - pip install oracledb
-  - Set env vars: ORACLE_TEST_DSN, ORACLE_TEST_USER, ORACLE_TEST_PASSWORD
+  - Set ORACLE_TEST_DSN (URL or bare DSN format)
 
 Run:
     docker run -d --name oracle-test -p 1521:1521 -e ORACLE_PWD=oracle \
       container-registry.oracle.com/database/free:latest
 
-    ORACLE_TEST_DSN=localhost:1521/FREEPDB1 \
-    ORACLE_TEST_USER=SYSTEM \
-    ORACLE_TEST_PASSWORD=oracle \
-    uv run pytest tests/test_oracle_backend_integration.py -v
+    ORACLE_TEST_DSN=oracle://SYSTEM:oracle@localhost:1521/FREEPDB1 \
+    uv run pytest tests/test_oracle_backend_integration.py -v -m oracle -n0
 """
 
 import array
@@ -55,19 +53,46 @@ SCHEMA_PREFIX = "hs_be"
 # ---------------------------------------------------------------------------
 
 
+def _parse_oracle_test_dsn() -> dict:
+    """Parse ORACLE_TEST_DSN into (user, password, bare_dsn).
+
+    Accepts URL format ``oracle://user:pass@host:port/service`` or bare DSN
+    ``host:port/service`` with separate ORACLE_TEST_USER / ORACLE_TEST_PASSWORD
+    env vars.
+    """
+    from urllib.parse import urlparse
+
+    dsn = os.environ["ORACLE_TEST_DSN"]
+    parsed = urlparse(dsn)
+    if parsed.scheme in ("oracle", "oracle+oracledb"):
+        host = parsed.hostname or "localhost"
+        port = parsed.port or 1521
+        service = parsed.path.lstrip("/") if parsed.path else "FREEPDB1"
+        return {
+            "user": parsed.username or "SYSTEM",
+            "password": parsed.password or "oracle",
+            "dsn": f"{host}:{port}/{service}",
+        }
+    return {
+        "user": os.environ.get("ORACLE_TEST_USER", "SYSTEM"),
+        "password": os.environ.get("ORACLE_TEST_PASSWORD", "oracle"),
+        "dsn": dsn,
+    }
+
+
 @pytest.fixture(scope="session")
 def oracle_dsn():
-    return os.environ["ORACLE_TEST_DSN"]
+    return _parse_oracle_test_dsn()["dsn"]
 
 
 @pytest.fixture(scope="session")
 def oracle_user():
-    return os.environ.get("ORACLE_TEST_USER", "SYSTEM")
+    return _parse_oracle_test_dsn()["user"]
 
 
 @pytest.fixture(scope="session")
 def oracle_password():
-    return os.environ.get("ORACLE_TEST_PASSWORD", "oracle")
+    return _parse_oracle_test_dsn()["password"]
 
 
 @pytest.fixture(scope="session")
