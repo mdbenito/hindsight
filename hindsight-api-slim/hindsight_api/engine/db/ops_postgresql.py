@@ -431,7 +431,9 @@ class PostgreSQLOps(DataAccessOps):
         # Entity expansion via observation_sources junction table.
         # Previously used PG-specific unnest(source_memory_ids) and array
         # overlap (&&). The junction table approach is portable across backends.
-        obs_sources_table = mu_table.replace("memory_units", "observation_sources")
+        from ..schema import fq_table
+
+        obs_sources_table = fq_table("observation_sources")
         entity_rows = await conn.fetch(
             f"""
             WITH source_ids AS (

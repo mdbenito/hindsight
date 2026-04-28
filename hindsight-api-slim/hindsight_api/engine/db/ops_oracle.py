@@ -450,7 +450,9 @@ class OracleOps(DataAccessOps):
         # Entity expansion via observation_sources junction table.
         # Previously used JSON_TABLE to explode source_memory_ids CLOB. The junction
         # table approach uses standard SQL joins, identical to the PG backend.
-        obs_sources_table = mu_table.replace("memory_units", "observation_sources")
+        from ..schema import fq_table
+
+        obs_sources_table = fq_table("observation_sources")
         entity_rows = await conn.fetch(
             f"""
             WITH seed_sources AS (

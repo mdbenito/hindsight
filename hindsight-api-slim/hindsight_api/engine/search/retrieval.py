@@ -246,13 +246,40 @@ async def retrieve_semantic_bm25_combined(
         # Oracle Text CONTAINS can fail with DRG-10599 ("column is not indexed")
         # if the CTXSYS text index hasn't synced yet or is unavailable.  Fall
         # back to semantic-only so the search still returns results.
-        # Keep the full param list (BM25 slots are harmless placeholders) since
-        # the semantic arms may reference tags at $5 when _include_bm25 is True.
+        # We must rebuild the semantic arms with no-BM25 param indices because
+        # Oracle requires every bind param to be referenced in the query (DPY-4008).
         err_str = str(e)
         if _include_bm25 and ("DRG-10599" in err_str or "ORA-30600" in err_str or "ORA-29902" in err_str):
             logger.warning("Oracle Text CONTAINS failed (%s), falling back to semantic-only search", err_str[:120])
-            semantic_only_query = "\nUNION ALL\n".join(arms[: len(fact_types)])
-            rows = await conn.fetch(semantic_only_query, *params)
+            # Rebuild with no-BM25 param layout: $1=embedding, $2=bank_id, $3=tags, ...
+            fb_tags_idx = 3
+            fb_tags_clause = build_tags_where_clause_simple(tags, fb_tags_idx, match=tags_match)
+            fb_groups_start = fb_tags_idx + (1 if tags else 0)
+            fb_groups_clause, _, _ = build_tag_groups_where_clause(tag_groups, fb_groups_start)
+            fb_next_idx = fb_groups_start + len(groups_params)
+            fb_created_clause = ""
+            if created_after is not None:
+                fb_created_clause += f" AND updated_at > ${fb_next_idx}"
+                fb_next_idx += 1
+            if created_before is not None:
+                fb_created_clause += f" AND updated_at < ${fb_next_idx}"
+                fb_next_idx += 1
+            fb_arms = [
+                dialect.build_semantic_arm(
+                    table=table, cols=cols, fact_type=ft,
+                    embedding_param="$1", bank_id_param="$2",
+                    fetch_limit=hnsw_fetch, tags_clause=fb_tags_clause,
+                    groups_clause=fb_groups_clause, extra_where=fb_created_clause,
+                )
+                for ft in fact_types
+            ]
+            fb_query = "\nUNION ALL\n".join(fb_arms)
+            fb_params: list = [query_emb_str, bank_id]
+            if tags:
+                fb_params.append(tags)
+            fb_params.extend(groups_params)
+            fb_params.extend(created_range_params)
+            rows = await conn.fetch(fb_query, *fb_params)
         else:
             raise
 

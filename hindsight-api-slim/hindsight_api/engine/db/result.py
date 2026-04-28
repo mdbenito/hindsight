@@ -101,4 +101,5 @@ class ResultRow:
         return len(data)
 
     def __bool__(self) -> bool:
-        return True
+        data = object.__getattribute__(self, "_data")
+        return bool(data)

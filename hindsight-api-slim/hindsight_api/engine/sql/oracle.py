@@ -309,4 +309,9 @@ class OracleDialect(SQLDialect):
                 safe.append(f"{{{t}}}")
             else:
                 safe.append(t)
-        return " OR ".join(safe) if safe else f"{{{tokens[0]}}}"
+        if safe:
+            return " OR ".join(safe)
+        # All tokens were filtered out — escape the original query text as a
+        # single term so we still attempt a search rather than erroring out.
+        fallback = query_text.strip() or tokens[0]
+        return f"{{{fallback}}}"

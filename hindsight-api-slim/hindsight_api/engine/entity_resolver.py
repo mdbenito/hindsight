@@ -423,12 +423,14 @@ class EntityResolver:
                 bank_id,
                 entity_texts_json,
             )
-        except Exception:
+        except Exception as e:
             # UTL_MATCH may not be available (ORA-06550, ORA-00904, etc.)
+            # Catch broadly because Oracle error types vary depending on driver.
             # Fall back to the "full" strategy which works on any backend.
             logger.warning(
                 "UTL_MATCH.JARO_WINKLER_SIMILARITY not available on Oracle — "
-                "falling back to 'full' entity lookup strategy."
+                "falling back to 'full' entity lookup strategy. Error: %s",
+                e,
             )
             self.entity_lookup = "full"
             return await self._resolve_entities_batch_full(conn, bank_id, entities_data, unit_event_date)
