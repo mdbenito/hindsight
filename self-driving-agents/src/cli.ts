@@ -134,10 +134,21 @@ const SKILL_MD = readFileSync(SKILL_PATH, "utf-8");
 
 // ── Plugin management ───────────────────────────────────
 
+const OPENCLAW_CONFIG_PATH = join(homedir(), ".openclaw", "openclaw.json");
+
 function readOpenClawConfig(): any {
-  const cfgPath = join(homedir(), ".openclaw", "openclaw.json");
-  if (!existsSync(cfgPath)) return null;
-  return JSON.parse(readFileSync(cfgPath, "utf-8"));
+  if (!existsSync(OPENCLAW_CONFIG_PATH)) return null;
+  return JSON.parse(readFileSync(OPENCLAW_CONFIG_PATH, "utf-8"));
+}
+
+function enableKnowledgeTools(): void {
+  const config = readOpenClawConfig();
+  if (!config) return;
+  const pc = config.plugins?.entries?.["hindsight-openclaw"]?.config;
+  if (!pc) return;
+  if (pc.enableKnowledgeTools === true) return;
+  pc.enableKnowledgeTools = true;
+  writeFileSync(OPENCLAW_CONFIG_PATH, JSON.stringify(config, null, 2) + "\n");
 }
 
 function isPluginInstalled(): boolean {
@@ -281,7 +292,10 @@ async function main() {
     const agentId = agentName || basename(dir);
 
     // Step 1: Ensure plugin
-    if (harness === "openclaw") await ensurePlugin();
+    if (harness === "openclaw") {
+      await ensurePlugin();
+      enableKnowledgeTools();
+    }
 
     // Step 2: Resolve bank + API from plugin config
     const { apiUrl, bankId, apiToken } = resolveFromPlugin(agentId);

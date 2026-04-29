@@ -2357,8 +2357,8 @@ ${memoriesFormatted}
     debug("[Hindsight] Hooks registered");
     log.info("agent hooks registered");
 
-    // Register knowledge tools (if registerTool is available on this OpenClaw version)
-    if (typeof api.registerTool === "function") {
+    // Register knowledge tools (opt-in via enableKnowledgeTools config flag)
+    if (pluginConfig.enableKnowledgeTools && typeof api.registerTool === "function") {
       try {
         const factory = createKnowledgeToolFactory({
           pluginConfig,

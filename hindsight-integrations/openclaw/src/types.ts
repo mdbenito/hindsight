@@ -110,6 +110,7 @@ export interface PluginConfig {
   retainQueuePath?: string; // Path to JSONL file for buffering failed retains. Default: ~/.openclaw/data/hindsight-retain-queue.jsonl
   retainQueueMaxAgeMs?: number; // Max age in ms for queued items. -1 = keep forever (default: -1)
   retainQueueFlushIntervalMs?: number; // How often to attempt flushing the queue in ms. Default: 60000 (1 min)
+  enableKnowledgeTools?: boolean; // Register agent_knowledge_* tools. Default: false. Set to true by the self-driving-agents CLI.
 }
 
 export interface ServiceConfig {
