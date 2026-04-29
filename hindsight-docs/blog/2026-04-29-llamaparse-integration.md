@@ -1,5 +1,5 @@
 ---
-title: "Intelligent Document Parsing with LlamaParse and Hindsight"
+title: "Unlock Agent Intelligence: Seed Your Agents' Memory with LlamaParse"
 authors: [benfrank241]
 date: 2026-04-29T14:00:00Z
 tags: [integrations, document-parsing, llamaparse, guide]
@@ -37,21 +37,39 @@ All of this happens transparently when you call `client.retain(document=file_byt
 First, get a LlamaParse API key from [llamaindex.ai](https://llamaindex.ai). Then configure Hindsight to use it:
 
 ```bash
-export HINDSIGHT_API_FILE_PARSER_LLAMA_PARSE_API_KEY=your-api-key
+export HINDSIGHT_API_FILE_PARSER_LLAMA_PARSE_API_KEY=your-llamaparse-api-key
+export HINDSIGHT_API_KEY=your-hindsight-api-key
 ```
 
-Or set it in your Python code:
+Then configure Hindsight in your code to use LlamaParse as the default parser:
 
 ```python
 from hindsight_client import Hindsight
 
 client = Hindsight(
     base_url="https://api.hindsight.vectorize.io",
-    api_key="your-hindsight-key"
+    api_key="your-hindsight-api-key"
 )
+
+# Enable LlamaParse as the default parser for retain_files()
+config = client.get_bank_config("your-bank-id")
+config["retain_default_strategy"] = "llamaparse"
+client.update_bank_config("your-bank-id", **config)
 ```
 
-Once configured, Hindsight automatically routes files to LlamaParse when needed. The service determines which file types it can handle, and Hindsight falls back gracefully if a type isn't supported.
+Once configured, Hindsight will use your default parser (markitdown or LlamaParse) when you call `retain_files()`. You can also override the parser on a per-file basis if you want to use markitdown for simple docs and LlamaParse for complex ones:
+
+```python
+# Use default parser (markitdown)
+client.retain_files(bank_id="my-bank", files=[Path("simple-readme.md")])
+
+# Override to use LlamaParse for specific files
+client.retain_files(
+    bank_id="my-bank",
+    files=[Path("complex-contract.pdf")],
+    files_metadata=[{"parser": "llamaparse"}]
+)
+```
 
 ## When to Use LlamaParse
 
@@ -78,17 +96,25 @@ The integration distinguishes between two classes of failures:
 
 This matters because you don't want to silently fail on an unsupported file type, but you also don't want to crash on a transient rate limit. The parser reports both clearly.
 
-## Comparing LlamaParse to Other Approaches
+## Choosing Your Parser: Markitdown vs LlamaParse
 
-If you're considering document parsing for your agents, you might wonder how LlamaParse compares to alternatives like PyPDF, pdfplumber, or Tesseract. The key difference: those tools extract raw text, while LlamaParse understands document *structure*.
+Hindsight comes with two document parsers built in:
 
-**PyPDF or pdfplumber** extract text line-by-line, which works for simple PDFs but often mangles tables, headers, and layout. A table becomes scattered lines; a multi-column document becomes jumbled text. Your agent has to re-parse what's already been parsed.
+**Markitdown** (default, built-in)
+- Fast, lightweight, works offline
+- Great for: text documents, markdown, simple PDFs, developer docs
+- Trade-off: loses table structure and layout nuance
+- Zero cost, no external dependencies
 
-**Tesseract** (OCR) handles scanned images well but produces raw character-level output with no structure understanding. A scanned contract becomes thousands of lines of disconnected text.
+**LlamaParse** (hosted service)
+- Vision models understand document structure
+- Great for: complex PDFs, scanned documents, tables, charts, mixed layouts
+- Trade-off: 10-30 second parsing time, requires API key
+- Best for: documents where structure carries meaning
 
-**LlamaParse** uses vision models to understand the document as a human would: it recognizes that a block is a table, that text is a heading, that an image has semantic meaning. It returns clean markdown that preserves structure, so your agent can actually reason about what it's reading.
+For most cases, start with markitdown. Use LlamaParse when your agents need to reason about document structure. You can also use **Iris** (Hindsight's knowledge parser) for extracting structured data from documents—it's optimized for converting docs into JSON schemas your agents understand.
 
-This is especially important when paired with Hindsight. Hindsight's fact extraction works best on well-structured, semantically meaningful content. A markdown document with proper headings, emphasis, and table formatting lets Hindsight extract precise facts. Raw text extraction creates noise that dilutes fact quality.
+Hindsight's fact extraction works best on well-structured content. A markdown document with proper headings, tables, and hierarchy lets Hindsight extract precise, actionable facts that your agents can reason about and learn from.
 
 ## Performance and Cost Considerations
 
