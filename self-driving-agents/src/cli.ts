@@ -1,38 +1,106 @@
 #!/usr/bin/env node
 /**
- * self-driving-agents — install a self-driving agent from a directory.
+ * self-driving-agents — install a self-driving agent.
  *
- * npx @vectorize-io/self-driving-agents install <dir> --harness openclaw [--agent <name>]
+ * npx @vectorize-io/self-driving-agents install <agent> --harness openclaw [--agent <name>]
+ *
+ * Agent resolution:
+ *   marketing-agent            → vectorize-io/self-driving-agents/marketing-agent (default repo)
+ *   my-org/my-repo/my-agent   → my-org/my-repo/my-agent on GitHub
+ *   ./local-dir                → local directory
+ *   /absolute/path             → local directory
  *
  * Directory layout:
  *   bank-template.json   — optional: bank config + mental models + directives
  *   content/             — optional: reference docs to ingest (.md, .txt, etc.)
- *
- * The CLI:
- *   1. Ensures the Hindsight plugin is installed and configured
- *   2. Copies template + content to the agent workspace
- *   3. Creates the harness agent and installs the skill
- *   4. Plugin bootstraps template + content on first session
  */
 
-import { readFileSync, writeFileSync, copyFileSync, mkdirSync, existsSync, readdirSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, rmSync } from "fs";
 import { join, resolve, extname, basename } from "path";
-import { homedir } from "os";
+import { homedir, tmpdir } from "os";
 import { execSync } from "child_process";
-import { createInterface } from "readline";
+import * as p from "@clack/prompts";
+import color from "picocolors";
+import {
+  HindsightClient,
+  sdk,
+  createClient,
+  createConfig,
+} from "@vectorize-io/hindsight-client";
 
-// ── Interactive prompts ─────────────────────────────────
+const DEFAULT_REPO = "vectorize-io/self-driving-agents";
 
-function prompt(question: string): Promise<string> {
-  const rl = createInterface({ input: process.stdin, output: process.stderr });
-  return new Promise((res) => {
-    rl.question(question, (answer) => { rl.close(); res(answer.trim()); });
-  });
+// ── Agent resolution ───────────────────────────────────
+
+function isLocalPath(input: string): boolean {
+  return input.startsWith("./") || input.startsWith("../") || input.startsWith("/") || input.startsWith("~");
 }
 
-async function confirm(question: string): Promise<boolean> {
-  const answer = await prompt(`${question} (y/n) `);
-  return answer.toLowerCase() === "y" || answer.toLowerCase() === "yes";
+/**
+ * Resolve the agent specifier to a local directory.
+ *
+ * - Local paths (./foo, /foo, ~/foo) → resolve directly
+ * - "name"                          → GitHub: vectorize-io/self-driving-agents/name
+ * - "org/repo/path"                 → GitHub: org/repo/path
+ */
+async function resolveAgentDir(input: string, spinner: ReturnType<typeof p.spinner>): Promise<{ dir: string; source: string; cleanup?: () => void }> {
+  if (isLocalPath(input)) {
+    const dir = resolve(input.replace(/^~/, homedir()));
+    if (!existsSync(dir)) throw new Error(`Directory not found: ${dir}`);
+    return { dir, source: dir };
+  }
+
+  // Parse GitHub reference: "name" or "org/repo/path/to/agent"
+  const parts = input.split("/");
+  let org: string, repo: string, subpath: string;
+
+  if (parts.length === 1) {
+    // Just a name → default repo
+    org = "vectorize-io";
+    repo = "self-driving-agents";
+    subpath = parts[0];
+  } else if (parts.length >= 3) {
+    // org/repo/path...
+    org = parts[0];
+    repo = parts[1];
+    subpath = parts.slice(2).join("/");
+  } else {
+    throw new Error(
+      `Invalid agent reference: '${input}'\n` +
+      `  Use: <name>, <org>/<repo>/<path>, or a local path (./dir)`
+    );
+  }
+
+  spinner.start(`Fetching ${color.cyan(`${org}/${repo}/${subpath}`)} from GitHub...`);
+
+  const tmp = join(tmpdir(), `sda-${Date.now()}`);
+  mkdirSync(tmp, { recursive: true });
+
+  try {
+    // Download repo tarball and extract the specific subdirectory
+    const tarballUrl = `https://github.com/${org}/${repo}/archive/refs/heads/main.tar.gz`;
+    execSync(
+      `curl -sL "${tarballUrl}" | tar xz -C "${tmp}" --strip-components=1 "${repo}-main/${subpath}"`,
+      { stdio: "pipe" },
+    );
+  } catch {
+    rmSync(tmp, { recursive: true, force: true });
+    throw new Error(
+      `Failed to fetch ${org}/${repo}/${subpath}\n` +
+      `  Make sure the repository and path exist on GitHub.`
+    );
+  }
+
+  const dir = join(tmp, subpath);
+  if (!existsSync(dir)) {
+    rmSync(tmp, { recursive: true, force: true });
+    throw new Error(`Path '${subpath}' not found in ${org}/${repo}`);
+  }
+
+  const source = `github.com/${org}/${repo}/${subpath}`;
+  spinner.stop(`Fetched ${color.cyan(source)}`);
+
+  return { dir, source, cleanup: () => rmSync(tmp, { recursive: true, force: true }) };
 }
 
 // ── Skill ───────────────────────────────────────────────
@@ -80,89 +148,103 @@ Examples:
 - Prefer fewer broad pages over many narrow ones
 `;
 
-// ── Hindsight plugin management ─────────────────────────
+// ── Plugin management ───────────────────────────────────
 
-function isPluginInstalled(harness: string): boolean {
-  if (harness !== "openclaw") return false;
-  try {
-    const configPath = join(homedir(), ".openclaw", "openclaw.json");
-    if (!existsSync(configPath)) return false;
-    const config = JSON.parse(readFileSync(configPath, "utf-8"));
-    const plugin = config.plugins?.entries?.["hindsight-openclaw"];
-    return plugin?.enabled !== false && plugin !== undefined;
-  } catch {
-    return false;
-  }
+function readOpenClawConfig(): any {
+  const cfgPath = join(homedir(), ".openclaw", "openclaw.json");
+  if (!existsSync(cfgPath)) return null;
+  return JSON.parse(readFileSync(cfgPath, "utf-8"));
 }
 
-function isPluginConfigured(harness: string): boolean {
-  if (harness !== "openclaw") return false;
-  try {
-    const configPath = join(homedir(), ".openclaw", "openclaw.json");
-    const config = JSON.parse(readFileSync(configPath, "utf-8"));
-    const pc = config.plugins?.entries?.["hindsight-openclaw"]?.config || {};
-    // Configured if it has an API URL, or embed version, or LLM provider set
-    return !!(pc.hindsightApiUrl || pc.embedVersion || pc.llmProvider);
-  } catch {
-    return false;
+function isPluginInstalled(): boolean {
+  const config = readOpenClawConfig();
+  if (!config) return false;
+  return config.plugins?.entries?.["hindsight-openclaw"]?.enabled !== false
+    && config.plugins?.entries?.["hindsight-openclaw"] !== undefined;
+}
+
+function isPluginConfigured(): boolean {
+  const config = readOpenClawConfig();
+  if (!config) return false;
+  const pc = config.plugins?.entries?.["hindsight-openclaw"]?.config || {};
+  return !!(pc.hindsightApiUrl || pc.embedVersion || pc.llmProvider);
+}
+
+function resolveFromPlugin(agentId: string): { apiUrl: string; bankId: string; apiToken?: string } {
+  const config = readOpenClawConfig();
+  if (!config) throw new Error("OpenClaw config not found");
+  const pc = config.plugins?.entries?.["hindsight-openclaw"]?.config || {};
+
+  const apiUrl = pc.hindsightApiUrl || `http://localhost:${pc.apiPort || 9077}`;
+  const apiToken = pc.hindsightApiToken || undefined;
+
+  let bankId: string;
+  if (pc.dynamicBankId === false && pc.bankId) {
+    bankId = pc.bankId;
+  } else {
+    const granularity: string[] = pc.dynamicBankGranularity || ["agent", "channel", "user"];
+    const fieldMap: Record<string, string> = { agent: agentId, channel: "unknown", user: "anonymous", provider: "unknown" };
+    const base = granularity.map((f) => encodeURIComponent(fieldMap[f] || "unknown")).join("::");
+    bankId = pc.bankIdPrefix ? `${pc.bankIdPrefix}-${base}` : base;
   }
+
+  return { apiUrl, bankId, apiToken };
 }
 
 function getPluginSummary(): string {
-  try {
-    const configPath = join(homedir(), ".openclaw", "openclaw.json");
-    const config = JSON.parse(readFileSync(configPath, "utf-8"));
-    const pc = config.plugins?.entries?.["hindsight-openclaw"]?.config || {};
-    if (pc.hindsightApiUrl) {
-      return `External API: ${pc.hindsightApiUrl}`;
-    } else if (pc.embedVersion) {
-      return `Embedded daemon v${pc.embedVersion}`;
-    } else {
-      return "Not configured";
-    }
-  } catch {
-    return "Unknown";
-  }
+  const config = readOpenClawConfig();
+  if (!config) return "Not found";
+  const pc = config.plugins?.entries?.["hindsight-openclaw"]?.config || {};
+  if (pc.hindsightApiUrl) return `External: ${pc.hindsightApiUrl}`;
+  if (pc.embedVersion) return `Embedded v${pc.embedVersion}`;
+  return "Not configured";
 }
 
-async function ensurePlugin(harness: string): Promise<void> {
-  if (harness !== "openclaw") return;
+function parseAgentsJson(raw: string): any[] {
+  const clean = raw.replace(/\n?\x1b\[[0-9;]*m[^\n]*/g, "").trim();
+  const arrStart = clean.indexOf("\n[");
+  const jsonStr = arrStart >= 0 ? clean.slice(arrStart + 1) : (clean.startsWith("[") ? clean : "[]");
+  return JSON.parse(jsonStr);
+}
 
-  if (!isPluginInstalled(harness)) {
-    console.log("Hindsight plugin not found. Installing...\n");
+async function ensurePlugin(): Promise<void> {
+  if (!isPluginInstalled()) {
+    p.log.warn("Hindsight plugin not found. Installing...");
     try {
       execSync("openclaw plugins install @vectorize-io/hindsight-openclaw", { stdio: "inherit" });
-      console.log();
     } catch {
-      console.error("Failed to install plugin. Install manually:");
-      console.error("  openclaw plugins install @vectorize-io/hindsight-openclaw");
+      p.cancel("Failed to install plugin. Run manually:\n  openclaw plugins install @vectorize-io/hindsight-openclaw");
       process.exit(1);
     }
   }
 
-  if (!isPluginConfigured(harness)) {
-    console.log("Hindsight plugin needs configuration.\n");
-    console.log("Running the setup wizard...\n");
+  if (!isPluginConfigured()) {
+    p.log.warn("Hindsight plugin needs configuration.");
     try {
-      execSync("npx --package @vectorize-io/hindsight-openclaw hindsight-openclaw-setup", { stdio: "inherit" });
-      console.log();
+      execSync("npx --yes --package @vectorize-io/hindsight-openclaw hindsight-openclaw-setup", { stdio: "inherit" });
     } catch {
-      console.error("Setup wizard failed. Run manually:");
-      console.error("  npx --package @vectorize-io/hindsight-openclaw hindsight-openclaw-setup");
+      p.cancel("Run the wizard manually:\n  npx --yes --package @vectorize-io/hindsight-openclaw hindsight-openclaw-setup");
       process.exit(1);
     }
   } else {
     const summary = getPluginSummary();
-    console.log(`Hindsight plugin: ${summary}`);
     if (process.stdin.isTTY) {
-      const ok = await confirm("Continue with this configuration?");
+      const ok = await p.confirm({
+        message: `Hindsight: ${color.cyan(summary)}. Use this?\n${color.dim("  Changing this will affect all existing agents — one OpenClaw instance shares a single Hindsight instance.")}`,
+      });
+      if (p.isCancel(ok)) { p.cancel("Cancelled."); process.exit(0); }
       if (!ok) {
-        console.log("\nRun the setup wizard to reconfigure:");
-        console.log("  npx --package @vectorize-io/hindsight-openclaw hindsight-openclaw-setup");
-        process.exit(0);
+        p.log.info("Launching configuration wizard...");
+        try {
+          execSync("npx --yes --package @vectorize-io/hindsight-openclaw hindsight-openclaw-setup", { stdio: "inherit" });
+        } catch {
+          p.cancel("Configuration failed. Run manually:\n  npx --yes --package @vectorize-io/hindsight-openclaw hindsight-openclaw-setup");
+          process.exit(1);
+        }
       }
+    } else {
+      p.log.info(`Hindsight: ${color.cyan(summary)}`);
     }
-    console.log();
   }
 }
 
@@ -172,24 +254,28 @@ async function main() {
   const args = process.argv.slice(2);
 
   if (args.length < 1 || args[0] === "--help" || args[0] === "-h") {
-    console.log(`Usage: npx @vectorize-io/self-driving-agents install <dir> --harness <harness> [--agent <name>]
+    console.log(`
+  ${color.bold("self-driving-agents")} — install a self-driving agent
 
-Arguments:
-  <dir>              Agent directory (contains optional bank-template.json + content/)
+  ${color.dim("Usage:")}
+    npx @vectorize-io/self-driving-agents install <agent> --harness <harness> [--agent <name>]
 
-Options:
-  --harness <h>      Required. openclaw | hermes | claude-code
-  --agent <name>     Agent name (defaults to directory name)`);
+  ${color.dim("Agent sources:")}
+    ${color.cyan("marketing-agent")}             → ${DEFAULT_REPO}/marketing-agent
+    ${color.cyan("org/repo/my-agent")}           → org/repo/my-agent on GitHub
+    ${color.cyan("./local-dir")}                 → local directory
+
+  ${color.dim("Options:")}
+    ${color.cyan("--harness <h>")}      Required. openclaw | hermes | claude-code
+    ${color.cyan("--agent <name>")}     Agent name (defaults to directory name)
+`);
     process.exit(0);
   }
 
   let dirArg = args[0] === "install" ? args[1] : args[0];
   const restArgs = args[0] === "install" ? args.slice(2) : args.slice(1);
 
-  if (!dirArg) {
-    console.error("Error: directory argument required");
-    process.exit(1);
-  }
+  if (!dirArg) { p.cancel("Agent argument required."); process.exit(1); }
 
   let harness: string | undefined;
   let agentName: string | undefined;
@@ -199,116 +285,137 @@ Options:
     else if (restArgs[i] === "--agent" && restArgs[i + 1]) agentName = restArgs[++i];
   }
 
-  if (!harness) {
-    console.error("Error: --harness is required (openclaw | hermes | claude-code)");
-    process.exit(1);
-  }
+  if (!harness) { p.cancel("--harness required (openclaw | hermes | claude-code)"); process.exit(1); }
 
-  const dir = resolve(dirArg);
-  if (!existsSync(dir)) {
-    console.error(`Error: directory not found: ${dir}`);
-    process.exit(1);
-  }
+  p.intro(color.bgCyan(color.black(` self-driving-agents `)));
 
-  const agentId = agentName || basename(dir);
+  // Step 0: Resolve agent directory (local or GitHub)
+  const spin = p.spinner();
+  const { dir, source, cleanup } = await resolveAgentDir(dirArg, spin);
 
-  // Step 1: Ensure Hindsight plugin is installed and configured
-  await ensurePlugin(harness);
+  try {
+    const agentId = agentName || basename(dir);
 
-  // Resolve workspace
-  let workspaceDir: string;
-  switch (harness) {
-    case "openclaw":
-      workspaceDir = join(homedir(), ".hindsight-agents", "openclaw", agentId);
-      break;
-    case "hermes":
-      workspaceDir = join(homedir(), ".hermes");
-      break;
-    case "claude-code":
-      workspaceDir = join(homedir(), ".claude");
-      break;
-    default:
-      console.error(`Unknown harness: ${harness}`);
-      process.exit(1);
-  }
+    // Step 1: Ensure plugin
+    if (harness === "openclaw") await ensurePlugin();
 
-  console.log(`Installing '${agentId}' on ${harness}`);
-  console.log(`  Source:    ${dir}`);
-  console.log(`  Workspace: ${workspaceDir}`);
-  console.log();
+    // Step 2: Resolve bank + API from plugin config
+    const { apiUrl, bankId, apiToken } = resolveFromPlugin(agentId);
 
-  mkdirSync(workspaceDir, { recursive: true });
+    const workspaceDir = join(homedir(), ".self-driving-agents", "openclaw", agentId);
 
-  // Step 2: Copy bank-template.json
-  const templateSrc = join(dir, "bank-template.json");
-  const hindsightDir = join(workspaceDir, ".hindsight");
-  if (existsSync(templateSrc)) {
-    mkdirSync(hindsightDir, { recursive: true });
-    copyFileSync(templateSrc, join(hindsightDir, "bank-template.json"));
-    console.log("Copied bank-template.json");
-  }
+    p.log.info([
+      `Agent:     ${color.bold(agentId)}`,
+      `Source:    ${color.dim(source)}`,
+      `Bank:      ${color.dim(bankId)}`,
+      `API:       ${color.dim(apiUrl)}`,
+      `Workspace: ${color.dim(workspaceDir)}`,
+    ].join("\n"));
 
-  // Step 3: Copy content/
-  const contentSrc = join(dir, "content");
-  if (existsSync(contentSrc)) {
-    const contentDst = join(hindsightDir, "content");
-    mkdirSync(contentDst, { recursive: true });
-    const exts = new Set([".md", ".txt", ".html", ".json", ".csv", ".xml"]);
-    const files = readdirSync(contentSrc).filter((f) => exts.has(extname(f).toLowerCase()));
-    for (const file of files) {
-      copyFileSync(join(contentSrc, file), join(contentDst, file));
-    }
-    if (files.length > 0) console.log(`Copied ${files.length} content file(s)`);
-  }
+    // Step 3: Create client + health check
+    const client = new HindsightClient({
+      baseUrl: apiUrl,
+      apiKey: apiToken,
+      userAgent: "self-driving-agents/0.1.0",
+    });
+    const lowLevel = createClient(createConfig({
+      baseUrl: apiUrl,
+      headers: {
+        ...(apiToken ? { Authorization: `Bearer ${apiToken}` } : {}),
+        "User-Agent": "self-driving-agents/0.1.0",
+      },
+    }));
 
-  // Step 4: Install skill
-  const skillDir = join(workspaceDir, "skills", "agent-knowledge");
-  mkdirSync(skillDir, { recursive: true });
-  writeFileSync(join(skillDir, "SKILL.md"), SKILL_MD);
-  console.log("Skill installed.");
-
-  // Step 5: Create harness agent
-  if (harness === "openclaw") {
+    spin.start("Connecting to Hindsight...");
     try {
-      const listOut = execSync("openclaw agents list --json 2>/dev/null", { encoding: "utf-8" });
-      const agents = JSON.parse(listOut).agents || [];
-      if (!agents.some((a: any) => a.name === agentId)) {
-        execSync(`openclaw agents add ${agentId} --workspace ${workspaceDir} --non-interactive`, { stdio: "pipe" });
-        console.log(`Created agent '${agentId}'.`);
-      } else {
-        console.log(`Agent '${agentId}' already exists.`);
-      }
+      await sdk.healthEndpointHealthGet({ client: lowLevel });
+      spin.stop("Connected to Hindsight");
     } catch {
-      console.log(`Note: create agent manually:\n  openclaw agents add ${agentId} --workspace ${workspaceDir} --non-interactive`);
+      spin.stop("Connection failed");
+      p.cancel(`Cannot reach Hindsight at ${apiUrl}\nStart the server or reconfigure the plugin.`);
+      process.exit(1);
     }
-  }
 
-  // Step 6: Patch startup file
-  const startupFile = harness === "openclaw" ? join(workspaceDir, "AGENTS.md") : undefined;
-  const startupPatch = '5. Read `skills/agent-knowledge/SKILL.md` and **execute its mandatory startup sequence**';
-
-  if (startupFile && existsSync(startupFile)) {
-    let text = readFileSync(startupFile, "utf-8");
-    if (!text.includes("agent-knowledge")) {
-      text = text.replace("Don't ask permission. Just do it.", `${startupPatch}\n\nDon't ask permission. Just do it.`);
-      writeFileSync(startupFile, text);
-      console.log("Startup patched.");
+    // Step 4: Import bank template
+    const templatePath = join(dir, "bank-template.json");
+    if (existsSync(templatePath)) {
+      spin.start("Importing bank template...");
+      const template = JSON.parse(readFileSync(templatePath, "utf-8"));
+      await sdk.importBankTemplate({
+        client: lowLevel,
+        path: { bank_id: bankId },
+        body: template,
+      });
+      spin.stop("Bank template imported");
     }
-  }
 
-  console.log();
-  console.log(`'${agentId}' installed.`);
-  console.log();
-  console.log("Next steps:");
-  if (harness === "openclaw") {
-    console.log("  1. openclaw gateway restart");
-    console.log(`  2. openclaw tui --session agent:${agentId}:main:session1`);
-    console.log();
-    console.log("The first session will import the template and content automatically.");
+    // Step 5: Ingest content
+    const contentDir = join(dir, "content");
+    if (existsSync(contentDir)) {
+      const exts = new Set([".md", ".txt", ".html", ".json", ".csv", ".xml"]);
+      const files = readdirSync(contentDir).filter((f) => exts.has(extname(f).toLowerCase())).sort();
+      if (files.length > 0) {
+        spin.start(`Ingesting ${files.length} file(s)...`);
+        for (const file of files) {
+          const content = readFileSync(join(contentDir, file), "utf-8");
+          if (!content.trim()) continue;
+          const docId = file.replace(/\.[^.]+$/, "");
+          await client.retainBatch(bankId, [{ content, document_id: docId }], { async: true });
+          spin.message(`Ingesting ${file}...`);
+        }
+        spin.stop(`Ingested ${files.length} file(s)`);
+      }
+    }
+
+    // Step 6: Create agent + install skill
+    mkdirSync(workspaceDir, { recursive: true });
+
+    const skillDir = join(workspaceDir, "skills", "agent-knowledge");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, "SKILL.md"), SKILL_MD);
+    p.log.success("Knowledge skill installed");
+
+    if (harness === "openclaw") {
+      try {
+        const listOut = execSync("openclaw agents list --json 2>/dev/null", { encoding: "utf-8" });
+        const agents = parseAgentsJson(listOut);
+        if (!agents.some((a: any) => a.name === agentId || a.id === agentId)) {
+          execSync(`openclaw agents add ${agentId} --workspace ${workspaceDir} --non-interactive`, { stdio: "pipe" });
+          p.log.success(`Agent '${agentId}' created`);
+        } else {
+          p.log.info(`Agent '${agentId}' already exists`);
+        }
+      } catch {
+        p.log.warn(`Create agent manually:\n  openclaw agents add ${agentId} --workspace ${workspaceDir} --non-interactive`);
+      }
+    }
+
+    // Step 7: Patch startup
+    const startupFile = join(workspaceDir, "AGENTS.md");
+    if (existsSync(startupFile)) {
+      let text = readFileSync(startupFile, "utf-8");
+      if (!text.includes("agent-knowledge")) {
+        text = text.replace(
+          "Don't ask permission. Just do it.",
+          '5. Read `skills/agent-knowledge/SKILL.md` and **execute its mandatory startup sequence**\n\nDon\'t ask permission. Just do it.'
+        );
+        writeFileSync(startupFile, text);
+        p.log.success("Startup patched");
+      }
+    }
+
+    p.note([
+      `${color.dim("1.")} openclaw gateway restart`,
+      `${color.dim("2.")} openclaw tui --session agent:${agentId}:main:session1`,
+    ].join("\n"), "Next steps");
+
+    p.outro(color.green(`'${agentId}' is ready`));
+  } finally {
+    cleanup?.();
   }
 }
 
 main().catch((err) => {
-  console.error(`Error: ${err.message}`);
+  p.cancel(err.message);
   process.exit(1);
 });

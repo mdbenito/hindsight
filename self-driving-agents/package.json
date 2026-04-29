@@ -31,5 +31,9 @@
   },
   "devDependencies": {
     "typescript": "^5.4"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.2.0",
+    "@vectorize-io/hindsight-client": "^0.5.6"
   }
 }
