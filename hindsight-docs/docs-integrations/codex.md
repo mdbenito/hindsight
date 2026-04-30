@@ -107,7 +107,7 @@ Settings are loaded from `~/.hindsight/codex.json`. Every setting can also be ov
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
 | `bankId` | `HINDSIGHT_BANK_ID` | `"codex"` | The bank to read from and write to. All sessions share this bank unless `dynamicBankId` is enabled. |
-| `bankMission` | `HINDSIGHT_BANK_MISSION` | coding assistant prompt | Describes the agent's purpose. Sent when creating or updating the bank. |
+| `bankMission` | `HINDSIGHT_BANK_MISSION` | coding assistant prompt | Agent identity/purpose stored on the memory bank as the reflect mission. Only affects `/reflect` — does not influence retain or recall. To steer fact extraction, use `retainMission`. |
 | `retainMission` | — | extraction prompt | Instructions for Hindsight's fact extraction — what to extract from coding conversations. |
 | `dynamicBankId` | `HINDSIGHT_DYNAMIC_BANK_ID` | `false` | When `true`, derives a unique bank ID from `dynamicBankGranularity` fields — useful for per-project isolation. |
 | `dynamicBankGranularity` | — | `["agent", "project"]` | Which fields to combine for dynamic bank IDs. `"project"` = working directory, `"agent"` = agent name. |

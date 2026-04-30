@@ -121,7 +121,7 @@ Optional settings in `~/.openclaw/openclaw.json`:
 - `llmModel` - LLM model used with `llmProvider` (provider default if omitted)
 - `llmApiKey` - API key for the LLM provider. **Sensitive** — set via `openclaw config set ... --ref-source env --ref-id OPENAI_API_KEY` to reference an env var.
 - `llmBaseUrl` - Optional base URL override for OpenAI-compatible providers (e.g. `https://openrouter.ai/api/v1`)
-- `bankMission` - Agent identity/purpose stored on the memory bank. Helps the memory engine understand context for better fact extraction during retain. Set once per bank on first use — not a recall prompt.
+- `bankMission` - Agent identity/purpose stored on the memory bank as the reflect mission. Only affects the `/reflect` operation — does not influence retain or recall. To steer fact extraction, use `retainMission` instead.
 - `dynamicBankId` - Enable per-context memory banks (default: `true`)
 - `bankId` - Static bank ID used when `dynamicBankId` is `false`.
 - `bankIdPrefix` - Optional prefix for bank IDs (e.g. `"prod"` → `"prod-slack-C123"` or `"prod-shared-bank"`)

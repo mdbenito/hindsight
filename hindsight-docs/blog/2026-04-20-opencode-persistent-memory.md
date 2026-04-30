@@ -169,7 +169,7 @@ You can configure the plugin at three levels (later wins):
 | `recallBudget` | `mid` | How many memories to retrieve: `low`, `mid`, `high` |
 | `retainEveryNTurns` | `3` | Auto-retain frequency (user turns) |
 | `retainMode` | `full-session` | `full-session` upserts the whole conversation; `last-turn` creates chunked windows |
-| `bankMission` | *(none)* | Guides what Hindsight extracts and how it reflects |
+| `bankMission` | *(none)* | Agent identity/purpose stored as the reflect mission. Only affects `/reflect` — use `retainMission` to guide extraction |
 | `dynamicBankId` | `false` | Derive bank ID from project/agent context |
 
 Full environment variable reference is in the [integration docs](/sdks/integrations/opencode).
@@ -249,5 +249,5 @@ The plugin is most valuable when you have ongoing project work where decisions, 
 - Install the plugin: `npm install @vectorize-io/opencode-hindsight`
 - Read the [OpenCode integration reference](/sdks/integrations/opencode) for full configuration details
 - Try the [quickstart](/developer/api/quickstart) if you prefer self-hosting
-- Set a `bankMission` that matches your project's focus — it significantly improves what gets extracted and recalled
+- Set a `retainMission` that matches your project's focus — it steers what gets extracted from conversations. Use `bankMission` to guide the `/reflect` operation
 - Explore the [cookbook](/cookbook) for memory patterns across agent frameworks

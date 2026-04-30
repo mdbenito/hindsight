@@ -123,7 +123,7 @@ Default models per provider: `openai` → `gpt-4o-mini`, `anthropic` → `claude
 | Setting | Default | Env Var | Description |
 |---------|---------|---------|-------------|
 | `bank_id` | `hermes` | `HINDSIGHT_BANK_ID` | Memory bank ID |
-| `bankMission` | `""` | `HINDSIGHT_BANK_MISSION` | Agent identity/purpose for the memory bank |
+| `bankMission` | `""` | `HINDSIGHT_BANK_MISSION` | Agent identity/purpose stored as the reflect mission. Only affects `/reflect` — does not influence retain or recall. |
 | `retainMission` | `null` | — | Custom retain mission (what to extract from conversations) |
 
 ### Auto-Recall
