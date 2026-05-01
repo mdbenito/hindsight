@@ -41,6 +41,31 @@ result = agent.run(messages=[ChatMessage.from_user("Remember that I prefer dark 
 print(result["messages"][-1].text)
 ```
 
+## Automatic Memory with HindsightToolset
+
+For automatic recall and retain without relying on the agent to call tools:
+
+```python
+from hindsight_haystack import HindsightToolset
+
+toolset = HindsightToolset(
+    client=client,
+    bank_id="user-123",
+    mission="Track user preferences",
+    auto_recall=True,   # Inject memories into system prompt before each turn
+    auto_retain=True,    # Store user + assistant messages after each turn
+)
+
+agent = Agent(
+    chat_generator=OpenAIChatGenerator(model="gpt-4o-mini"),
+    tools=toolset,
+    system_prompt="You are a helpful assistant with long-term memory.",
+)
+
+# Use toolset.run() for automatic memory behavior
+result = toolset.run(agent, messages=[ChatMessage.from_user("I prefer dark mode")])
+```
+
 ## Selective Tools
 
 ```python

@@ -3,7 +3,9 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from haystack.dataclasses import ChatMessage
 from hindsight_haystack import (
+    HindsightToolset,
     configure,
     create_hindsight_tools,
     reset_config,
@@ -32,9 +34,10 @@ def _mock_recall_response(texts: list[str]):
     return response
 
 
-def _mock_reflect_response(text: str):
+def _mock_reflect_response(text: str, structured_output: dict | None = None):
     response = MagicMock()
     response.text = text
+    response.structured_output = structured_output
     return response
 
 
@@ -708,3 +711,386 @@ class TestRunSync:
 
         with pytest.raises(ValueError, match="test error"):
             _run_sync(failing())
+
+
+class TestReflectStructuredOutput:
+    """Verify reflect returns structured JSON when response_schema is set."""
+
+    def test_reflect_returns_structured_output_when_schema_set(self):
+        client = _mock_client()
+        schema = {"type": "object", "properties": {"summary": {"type": "string"}}}
+        structured = {"summary": "User prefers Python"}
+        client.areflect.return_value = _mock_reflect_response(
+            "Some prose", structured_output=structured
+        )
+        tools = create_hindsight_tools(
+            bank_id="test", client=client, reflect_response_schema=schema
+        )
+        reflect_tool = [t for t in tools if t.name == "reflect_on_memory"][0]
+        result = reflect_tool.invoke(query="query")
+        import json
+
+        assert json.loads(result) == structured
+
+    def test_reflect_returns_text_when_no_schema(self):
+        client = _mock_client()
+        client.areflect.return_value = _mock_reflect_response(
+            "Plain prose", structured_output={"summary": "data"}
+        )
+        tools = create_hindsight_tools(bank_id="test", client=client)
+        reflect_tool = [t for t in tools if t.name == "reflect_on_memory"][0]
+        result = reflect_tool.invoke(query="query")
+        assert result == "Plain prose"
+
+    def test_reflect_falls_back_to_text_when_structured_output_is_none(self):
+        client = _mock_client()
+        schema = {"type": "object", "properties": {"summary": {"type": "string"}}}
+        client.areflect.return_value = _mock_reflect_response(
+            "Fallback prose", structured_output=None
+        )
+        tools = create_hindsight_tools(
+            bank_id="test", client=client, reflect_response_schema=schema
+        )
+        reflect_tool = [t for t in tools if t.name == "reflect_on_memory"][0]
+        result = reflect_tool.invoke(query="query")
+        assert result == "Fallback prose"
+
+
+class TestBankCreationRetry:
+    """Verify _ensure_bank retries on transient errors but not on 'already exists'."""
+
+    def test_retries_on_transient_error(self):
+        client = _mock_client()
+        client.acreate_bank.side_effect = [
+            RuntimeError("connection refused"),
+            None,  # succeeds on second try
+        ]
+        client.aretain.return_value = _mock_retain_response()
+        tools = create_hindsight_tools(
+            bank_id="test", client=client, mission="my mission"
+        )
+        retain_tool = [t for t in tools if t.name == "retain_memory"][0]
+        # First call — bank creation fails transiently
+        retain_tool.invoke(content="first")
+        # Second call — bank creation should be retried and succeed
+        retain_tool.invoke(content="second")
+        assert client.acreate_bank.call_count == 2
+
+    def test_no_retry_on_already_exists(self):
+        client = _mock_client()
+        client.acreate_bank.side_effect = RuntimeError("bank already exists")
+        client.aretain.return_value = _mock_retain_response()
+        tools = create_hindsight_tools(
+            bank_id="test", client=client, mission="my mission"
+        )
+        retain_tool = [t for t in tools if t.name == "retain_memory"][0]
+        retain_tool.invoke(content="first")
+        retain_tool.invoke(content="second")
+        # Should only try once because "already exists" marks as initialized
+        assert client.acreate_bank.call_count == 1
+
+    def test_no_retry_on_409_conflict(self):
+        client = _mock_client()
+        client.acreate_bank.side_effect = RuntimeError("409 Conflict")
+        client.aretain.return_value = _mock_retain_response()
+        tools = create_hindsight_tools(
+            bank_id="test", client=client, mission="my mission"
+        )
+        retain_tool = [t for t in tools if t.name == "retain_memory"][0]
+        retain_tool.invoke(content="first")
+        retain_tool.invoke(content="second")
+        assert client.acreate_bank.call_count == 1
+
+
+class TestHindsightToolset:
+    """Test the HindsightToolset class."""
+
+    def test_creates_three_tools_by_default(self):
+        client = _mock_client()
+        toolset = HindsightToolset(bank_id="test", client=client)
+        assert len(toolset) == 3
+        names = {t.name for t in toolset}
+        assert names == {"retain_memory", "recall_memory", "reflect_on_memory"}
+
+    def test_include_flags(self):
+        client = _mock_client()
+        toolset = HindsightToolset(
+            bank_id="test",
+            client=client,
+            include_retain=True,
+            include_recall=False,
+            include_reflect=False,
+        )
+        assert len(toolset) == 1
+        assert toolset[0].name == "retain_memory"
+
+    def test_serialization_round_trip(self):
+        client = _mock_client()
+        client._base_url = "http://test:8888"
+        client._api_key = "test-key"
+        toolset = HindsightToolset(
+            bank_id="test",
+            client=client,
+            auto_recall=True,
+            auto_retain=True,
+            mission="my mission",
+        )
+
+        d = toolset.to_dict()
+        assert d["data"]["auto_recall"] is True
+        assert d["data"]["auto_retain"] is True
+        assert d["data"]["backend_kwargs"]["bank_id"] == "test"
+
+        with patch("hindsight_haystack._client.Hindsight") as mock_cls:
+            mock_cls.return_value = _mock_client()
+            restored = HindsightToolset.from_dict(d)
+            assert len(restored) == 3
+            assert restored._auto_recall is True
+            assert restored._auto_retain is True
+
+
+class TestToolsetAutoRecall:
+    """Test auto-recall behavior in HindsightToolset.run()."""
+
+    def test_auto_recall_enriches_system_prompt(self):
+        client = _mock_client()
+        client.arecall.return_value = _mock_recall_response(
+            ["User likes Python", "User is in NYC"]
+        )
+        toolset = HindsightToolset(
+            bank_id="test", client=client, auto_recall=True
+        )
+
+        # Create a mock agent
+        agent = MagicMock()
+        agent.system_prompt = "You are helpful."
+        agent.run.return_value = {
+            "messages": [ChatMessage.from_assistant("response")],
+            "last_message": ChatMessage.from_assistant("response"),
+        }
+
+        toolset.run(
+            agent, messages=[ChatMessage.from_user("What do you know about me?")]
+        )
+
+        # Agent.run should have been called with enriched system_prompt
+        call_kwargs = agent.run.call_args[1]
+        assert "User likes Python" in call_kwargs["system_prompt"]
+        assert "User is in NYC" in call_kwargs["system_prompt"]
+        assert "You are helpful." in call_kwargs["system_prompt"]
+
+    def test_auto_recall_uses_agent_system_prompt_when_none_provided(self):
+        client = _mock_client()
+        client.arecall.return_value = _mock_recall_response(["some memory"])
+        toolset = HindsightToolset(
+            bank_id="test", client=client, auto_recall=True
+        )
+
+        agent = MagicMock()
+        agent.system_prompt = "Agent default prompt."
+        agent.run.return_value = {
+            "messages": [],
+            "last_message": ChatMessage.from_assistant("ok"),
+        }
+
+        toolset.run(agent, messages=[ChatMessage.from_user("hello")])
+        call_kwargs = agent.run.call_args[1]
+        assert "Agent default prompt." in call_kwargs["system_prompt"]
+
+    def test_auto_recall_overrides_with_explicit_system_prompt(self):
+        client = _mock_client()
+        client.arecall.return_value = _mock_recall_response(["memory"])
+        toolset = HindsightToolset(
+            bank_id="test", client=client, auto_recall=True
+        )
+
+        agent = MagicMock()
+        agent.system_prompt = "Agent default."
+        agent.run.return_value = {
+            "messages": [],
+            "last_message": ChatMessage.from_assistant("ok"),
+        }
+
+        toolset.run(
+            agent,
+            messages=[ChatMessage.from_user("hi")],
+            system_prompt="Custom prompt.",
+        )
+        call_kwargs = agent.run.call_args[1]
+        # Should use explicit prompt, not agent's default
+        assert "Custom prompt." in call_kwargs["system_prompt"]
+        assert "Agent default." not in call_kwargs["system_prompt"]
+
+    def test_auto_recall_skips_when_no_user_message(self):
+        client = _mock_client()
+        toolset = HindsightToolset(
+            bank_id="test", client=client, auto_recall=True
+        )
+
+        agent = MagicMock()
+        agent.system_prompt = "base prompt"
+        agent.run.return_value = {
+            "messages": [],
+            "last_message": ChatMessage.from_assistant("ok"),
+        }
+
+        toolset.run(agent, messages=[ChatMessage.from_system("system msg")])
+        # No recall should have been attempted
+        client.arecall.assert_not_called()
+
+    def test_auto_recall_disabled_by_default(self):
+        client = _mock_client()
+        toolset = HindsightToolset(bank_id="test", client=client)
+
+        agent = MagicMock()
+        agent.system_prompt = "base"
+        agent.run.return_value = {
+            "messages": [],
+            "last_message": ChatMessage.from_assistant("ok"),
+        }
+
+        toolset.run(agent, messages=[ChatMessage.from_user("hello")])
+        client.arecall.assert_not_called()
+
+    def test_auto_recall_no_memories_passes_base_prompt(self):
+        client = _mock_client()
+        client.arecall.return_value = _mock_recall_response([])
+        toolset = HindsightToolset(
+            bank_id="test", client=client, auto_recall=True
+        )
+
+        agent = MagicMock()
+        agent.system_prompt = "base prompt"
+        agent.run.return_value = {
+            "messages": [],
+            "last_message": ChatMessage.from_assistant("ok"),
+        }
+
+        toolset.run(agent, messages=[ChatMessage.from_user("hello")])
+        call_kwargs = agent.run.call_args[1]
+        assert call_kwargs["system_prompt"] == "base prompt"
+
+
+class TestToolsetAutoRetain:
+    """Test auto-retain behavior in HindsightToolset.run()."""
+
+    def test_auto_retain_stores_user_and_assistant_messages(self):
+        client = _mock_client()
+        client.aretain.return_value = _mock_retain_response()
+        toolset = HindsightToolset(
+            bank_id="test", client=client, auto_retain=True
+        )
+
+        agent = MagicMock()
+        agent.system_prompt = None
+        last_msg = ChatMessage.from_assistant("I'll remember that.")
+        agent.run.return_value = {
+            "messages": [last_msg],
+            "last_message": last_msg,
+        }
+
+        toolset.run(
+            agent, messages=[ChatMessage.from_user("My favorite color is blue.")]
+        )
+
+        # Should have retained user message + assistant response
+        assert client.aretain.call_count == 2
+        calls = [c[1]["content"] for c in client.aretain.call_args_list]
+        assert "My favorite color is blue." in calls
+        assert "I'll remember that." in calls
+
+    def test_auto_retain_skips_system_messages(self):
+        client = _mock_client()
+        client.aretain.return_value = _mock_retain_response()
+        toolset = HindsightToolset(
+            bank_id="test", client=client, auto_retain=True
+        )
+
+        agent = MagicMock()
+        agent.system_prompt = None
+        last_msg = ChatMessage.from_assistant("ok")
+        agent.run.return_value = {
+            "messages": [last_msg],
+            "last_message": last_msg,
+        }
+
+        toolset.run(
+            agent,
+            messages=[
+                ChatMessage.from_system("system context"),
+                ChatMessage.from_user("hello"),
+            ],
+        )
+
+        # Only user + assistant, not system
+        assert client.aretain.call_count == 2
+
+    def test_auto_retain_disabled_by_default(self):
+        client = _mock_client()
+        toolset = HindsightToolset(bank_id="test", client=client)
+
+        agent = MagicMock()
+        agent.system_prompt = None
+        agent.run.return_value = {
+            "messages": [],
+            "last_message": ChatMessage.from_assistant("ok"),
+        }
+
+        toolset.run(agent, messages=[ChatMessage.from_user("hello")])
+        client.aretain.assert_not_called()
+
+    def test_auto_retain_handles_error_gracefully(self):
+        client = _mock_client()
+        client.aretain.side_effect = RuntimeError("connection refused")
+        toolset = HindsightToolset(
+            bank_id="test", client=client, auto_retain=True
+        )
+
+        agent = MagicMock()
+        agent.system_prompt = None
+        last_msg = ChatMessage.from_assistant("ok")
+        agent.run.return_value = {
+            "messages": [last_msg],
+            "last_message": last_msg,
+        }
+
+        # Should not raise even though retain fails
+        result = toolset.run(
+            agent, messages=[ChatMessage.from_user("hello")]
+        )
+        assert result is not None
+
+
+class TestToolsetAutoRecallAndRetain:
+    """Test combined auto-recall + auto-retain behavior."""
+
+    def test_both_auto_recall_and_retain(self):
+        client = _mock_client()
+        client.arecall.return_value = _mock_recall_response(["remembered fact"])
+        client.aretain.return_value = _mock_retain_response()
+        toolset = HindsightToolset(
+            bank_id="test",
+            client=client,
+            auto_recall=True,
+            auto_retain=True,
+        )
+
+        agent = MagicMock()
+        agent.system_prompt = "You are helpful."
+        last_msg = ChatMessage.from_assistant("Here's what I know.")
+        agent.run.return_value = {
+            "messages": [last_msg],
+            "last_message": last_msg,
+        }
+
+        toolset.run(
+            agent, messages=[ChatMessage.from_user("Tell me about myself")]
+        )
+
+        # Recall was called for prompt enrichment
+        client.arecall.assert_called_once()
+        # Retain was called for user + assistant messages
+        assert client.aretain.call_count == 2
+        # System prompt was enriched
+        call_kwargs = agent.run.call_args[1]
+        assert "remembered fact" in call_kwargs["system_prompt"]

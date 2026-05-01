@@ -1,16 +1,19 @@
 """Haystack tool factory for Hindsight memory operations.
 
 Provides a convenience factory that creates Haystack-compatible ``Tool``
-instances backed by Hindsight's retain/recall/reflect APIs.
+instances backed by Hindsight's retain/recall/reflect APIs, and a
+``HindsightToolset`` with optional auto-recall and auto-retain.
 """
 
 import asyncio
+import json
 import logging
 import threading
 import uuid
 from typing import Any, Optional
 
-from haystack.tools import Tool
+from haystack.dataclasses import ChatMessage
+from haystack.tools import Tool, Toolset
 from hindsight_client import Hindsight
 
 from ._client import resolve_client
@@ -46,6 +49,12 @@ def _run_sync(coro):  # type: ignore[no-untyped-def]
     """
     future = asyncio.run_coroutine_threadsafe(coro, _loop)
     return future.result()
+
+
+DEFAULT_MEMORY_PROMPT = (
+    "Below are relevant memories from previous conversations:\n{memories}\n"
+    "Use these memories to provide more personalized and contextual responses."
+)
 
 
 class _HindsightToolBackend:
@@ -135,9 +144,13 @@ class _HindsightToolBackend:
             self._bank_initialized = True
             logger.debug(f"Created/updated bank: {self._bank_id}")
         except Exception as e:
-            # Bank may already exist — that's fine
-            self._bank_initialized = True
-            logger.debug(f"Bank creation for {self._bank_id}: {e}")
+            err_str = str(e).lower()
+            if "already exists" in err_str or "409" in err_str or "conflict" in err_str:
+                self._bank_initialized = True
+                logger.debug(f"Bank already exists: {self._bank_id}")
+            else:
+                # Transient error — don't mark as initialized so we retry next time
+                logger.warning(f"Bank creation failed for {self._bank_id}: {e}")
 
     def _generate_document_id(self) -> str:
         """Generate a unique document_id for retain operations."""
@@ -217,7 +230,7 @@ class _HindsightToolBackend:
             return "Memory stored successfully."
         except Exception as e:
             logger.error(f"Retain failed: {e}")
-            return f"Failed to store memory: {e}"
+            return f"Failed to store memory: {e!s:.200}"
 
     def recall_memory(self, query: str) -> str:
         """Search long-term memory for relevant information.
@@ -234,7 +247,7 @@ class _HindsightToolBackend:
             return self._format_recall(response)
         except Exception as e:
             logger.error(f"Recall failed: {e}")
-            return f"Failed to search memory: {e}"
+            return f"Failed to search memory: {e!s:.200}"
 
     def reflect_on_memory(self, query: str) -> str:
         """Synthesize a thoughtful answer from long-term memories.
@@ -248,13 +261,16 @@ class _HindsightToolBackend:
         try:
             self._ensure_bank()
             response = _run_sync(self._client.areflect(**self._reflect_kwargs(query)))
+            # When response_schema is set, return the structured JSON output
+            if self._reflect_response_schema and response.structured_output is not None:
+                return json.dumps(response.structured_output)
             return response.text or "No relevant memories found."
         except Exception as e:
             logger.error(f"Reflect failed: {e}")
-            return f"Failed to reflect on memory: {e}"
+            return f"Failed to reflect on memory: {e!s:.200}"
 
 
-# -- Tool definitions mapping operation name → (method name, description, parameter schema) --
+# -- Tool definitions mapping operation name -> (method name, description, parameter schema) --
 _TOOL_DEFS: dict[str, tuple[str, str, dict[str, Any]]] = {
     "retain_memory": (
         "retain_memory",
@@ -367,6 +383,81 @@ class _HindsightTool(Tool):
         )
 
 
+def _build_backend_kwargs(
+    *,
+    bank_id: str,
+    client: Optional[Hindsight],
+    hindsight_api_url: Optional[str],
+    api_key: Optional[str],
+    budget: Optional[str],
+    max_tokens: Optional[int],
+    tags: Optional[list[str]],
+    recall_tags: Optional[list[str]],
+    recall_tags_match: Optional[str],
+    retain_metadata: Optional[dict[str, str]],
+    retain_document_id: Optional[str],
+    retain_context: Optional[str],
+    recall_types: Optional[list[str]],
+    recall_include_entities: bool,
+    reflect_context: Optional[str],
+    reflect_max_tokens: Optional[int],
+    reflect_response_schema: Optional[dict[str, Any]],
+    reflect_tags: Optional[list[str]],
+    reflect_tags_match: Optional[str],
+    mission: Optional[str],
+) -> dict[str, Any]:
+    """Build serializable backend kwargs, extracting client connection info."""
+    serializable_url = hindsight_api_url
+    serializable_key = api_key
+    if client is not None and serializable_url is None:
+        serializable_url = getattr(client, "_base_url", None) or getattr(client, "base_url", None)
+        if serializable_url is not None:
+            serializable_url = str(serializable_url)
+    if client is not None and serializable_key is None:
+        serializable_key = getattr(client, "_api_key", None) or getattr(client, "api_key", None)
+
+    return {
+        "bank_id": bank_id,
+        "hindsight_api_url": serializable_url,
+        "api_key": serializable_key,
+        "budget": budget,
+        "max_tokens": max_tokens,
+        "tags": tags,
+        "recall_tags": recall_tags,
+        "recall_tags_match": recall_tags_match,
+        "retain_metadata": retain_metadata,
+        "retain_document_id": retain_document_id,
+        "retain_context": retain_context,
+        "recall_types": recall_types,
+        "recall_include_entities": recall_include_entities,
+        "reflect_context": reflect_context,
+        "reflect_max_tokens": reflect_max_tokens,
+        "reflect_response_schema": reflect_response_schema,
+        "reflect_tags": reflect_tags,
+        "reflect_tags_match": reflect_tags_match,
+        "mission": mission,
+    }
+
+
+def _build_tools(
+    backend: _HindsightToolBackend,
+    backend_kwargs: dict[str, Any],
+    *,
+    include_retain: bool = True,
+    include_recall: bool = True,
+    include_reflect: bool = True,
+) -> list[Tool]:
+    """Create _HindsightTool instances from a backend."""
+    tools: list[Tool] = []
+    if include_retain:
+        tools.append(_HindsightTool(backend=backend, tool_name="retain_memory", backend_kwargs=backend_kwargs))
+    if include_recall:
+        tools.append(_HindsightTool(backend=backend, tool_name="recall_memory", backend_kwargs=backend_kwargs))
+    if include_reflect:
+        tools.append(_HindsightTool(backend=backend, tool_name="reflect_on_memory", backend_kwargs=backend_kwargs))
+    return tools
+
+
 def create_hindsight_tools(
     *,
     bank_id: str,
@@ -400,7 +491,8 @@ def create_hindsight_tools(
     """Create Hindsight memory tools for a Haystack agent.
 
     Convenience factory that creates a backend and returns Haystack ``Tool``
-    instances ready for use with any Haystack agent.
+    instances ready for use with any Haystack agent. For automatic recall
+    and retain behavior, use :class:`HindsightToolset` instead.
 
     Args:
         bank_id: The Hindsight memory bank to operate on.
@@ -436,51 +528,331 @@ def create_hindsight_tools(
             tool creation. Tool invocations return error strings instead
             of raising.
     """
-    # Build kwargs dict for backend (used for both instantiation and serialization).
-    # The client object can't be serialized, so extract its connection info
-    # into backend_kwargs to enable round-trip serialization.
-    serializable_url = hindsight_api_url
-    serializable_key = api_key
-    if client is not None and serializable_url is None:
-        serializable_url = getattr(client, "_base_url", None) or getattr(client, "base_url", None)
-        if serializable_url is not None:
-            serializable_url = str(serializable_url)
-    if client is not None and serializable_key is None:
-        serializable_key = getattr(client, "_api_key", None) or getattr(client, "api_key", None)
-
-    backend_kwargs: dict[str, Any] = {
-        "bank_id": bank_id,
-        "hindsight_api_url": serializable_url,
-        "api_key": serializable_key,
-        "budget": budget,
-        "max_tokens": max_tokens,
-        "tags": tags,
-        "recall_tags": recall_tags,
-        "recall_tags_match": recall_tags_match,
-        "retain_metadata": retain_metadata,
-        "retain_document_id": retain_document_id,
-        "retain_context": retain_context,
-        "recall_types": recall_types,
-        "recall_include_entities": recall_include_entities,
-        "reflect_context": reflect_context,
-        "reflect_max_tokens": reflect_max_tokens,
-        "reflect_response_schema": reflect_response_schema,
-        "reflect_tags": reflect_tags,
-        "reflect_tags_match": reflect_tags_match,
-        "mission": mission,
-    }
+    backend_kwargs = _build_backend_kwargs(
+        bank_id=bank_id,
+        client=client,
+        hindsight_api_url=hindsight_api_url,
+        api_key=api_key,
+        budget=budget,
+        max_tokens=max_tokens,
+        tags=tags,
+        recall_tags=recall_tags,
+        recall_tags_match=recall_tags_match,
+        retain_metadata=retain_metadata,
+        retain_document_id=retain_document_id,
+        retain_context=retain_context,
+        recall_types=recall_types,
+        recall_include_entities=recall_include_entities,
+        reflect_context=reflect_context,
+        reflect_max_tokens=reflect_max_tokens,
+        reflect_response_schema=reflect_response_schema,
+        reflect_tags=reflect_tags,
+        reflect_tags_match=reflect_tags_match,
+        mission=mission,
+    )
 
     backend = _HindsightToolBackend(client=client, **backend_kwargs)
 
-    tools: list[Tool] = []
+    return _build_tools(
+        backend,
+        backend_kwargs,
+        include_retain=include_retain,
+        include_recall=include_recall,
+        include_reflect=include_reflect,
+    )
 
-    if include_retain:
-        tools.append(_HindsightTool(backend=backend, tool_name="retain_memory", backend_kwargs=backend_kwargs))
 
-    if include_recall:
-        tools.append(_HindsightTool(backend=backend, tool_name="recall_memory", backend_kwargs=backend_kwargs))
+class HindsightToolset(Toolset):
+    """Haystack ``Toolset`` with optional auto-recall and auto-retain.
 
-    if include_reflect:
-        tools.append(_HindsightTool(backend=backend, tool_name="reflect_on_memory", backend_kwargs=backend_kwargs))
+    Groups Hindsight memory tools into a single toolset and optionally adds
+    automatic memory behavior:
 
-    return tools
+    - **auto_recall**: Before each agent turn, recalls relevant memories and
+      prepends them to the system prompt so the agent has context without
+      needing to call a tool.
+    - **auto_retain**: After each agent turn, retains user and assistant
+      messages to Hindsight for long-term storage.
+
+    Use :meth:`run` / :meth:`run_async` for automatic behavior, or pass the
+    toolset directly to ``Agent(tools=...)`` for tool-only (explicit) mode.
+
+    Example::
+
+        from hindsight_haystack import HindsightToolset
+        from haystack.components.agents import Agent
+        from haystack.components.generators.chat import OpenAIChatGenerator
+
+        toolset = HindsightToolset(
+            bank_id="user-123",
+            client=client,
+            mission="Track user preferences",
+            auto_recall=True,
+            auto_retain=True,
+        )
+
+        agent = Agent(
+            chat_generator=OpenAIChatGenerator(),
+            tools=toolset,
+            system_prompt="You are a helpful assistant with long-term memory.",
+        )
+
+        # Use toolset.run() for auto-recall/retain behavior
+        result = toolset.run(agent, messages=[ChatMessage.from_user("Hi!")])
+
+    Args:
+        bank_id: The Hindsight memory bank to operate on.
+        client: Pre-configured Hindsight client (preferred).
+        hindsight_api_url: API URL (used if no client provided).
+        api_key: API key (used if no client provided).
+        budget: Recall/reflect budget level (low/mid/high).
+        max_tokens: Maximum tokens for recall results.
+        tags: Tags applied when storing memories via retain.
+        recall_tags: Tags to filter when searching memories.
+        recall_tags_match: Tag matching mode.
+        retain_metadata: Default metadata for retain operations.
+        retain_document_id: Default document_id for retain.
+        retain_context: Source label for retain operations.
+        recall_types: Fact types to filter on recall.
+        recall_include_entities: Include entities in recall results.
+        reflect_context: Additional context for reflect.
+        reflect_max_tokens: Max tokens for reflect.
+        reflect_response_schema: JSON schema for structured reflect output.
+        reflect_tags: Tags to filter reflect memories.
+        reflect_tags_match: Tag matching for reflect.
+        mission: Bank mission for fact extraction context.
+        include_retain: Include the retain tool (default True).
+        include_recall: Include the recall tool (default True).
+        include_reflect: Include the reflect tool (default True).
+        auto_recall: Auto-recall memories into system prompt before each turn.
+        auto_retain: Auto-retain user/assistant messages after each turn.
+        memory_prompt_template: Template for injecting memories into system
+            prompt. Must contain ``{memories}`` placeholder.
+    """
+
+    def __init__(
+        self,
+        *,
+        bank_id: str,
+        client: Optional[Hindsight] = None,
+        hindsight_api_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        budget: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        tags: Optional[list[str]] = None,
+        recall_tags: Optional[list[str]] = None,
+        recall_tags_match: Optional[str] = None,
+        retain_metadata: Optional[dict[str, str]] = None,
+        retain_document_id: Optional[str] = None,
+        retain_context: Optional[str] = None,
+        recall_types: Optional[list[str]] = None,
+        recall_include_entities: bool = False,
+        reflect_context: Optional[str] = None,
+        reflect_max_tokens: Optional[int] = None,
+        reflect_response_schema: Optional[dict[str, Any]] = None,
+        reflect_tags: Optional[list[str]] = None,
+        reflect_tags_match: Optional[str] = None,
+        mission: Optional[str] = None,
+        include_retain: bool = True,
+        include_recall: bool = True,
+        include_reflect: bool = True,
+        auto_recall: bool = False,
+        auto_retain: bool = False,
+        memory_prompt_template: str = DEFAULT_MEMORY_PROMPT,
+    ):
+        backend_kwargs = _build_backend_kwargs(
+            bank_id=bank_id,
+            client=client,
+            hindsight_api_url=hindsight_api_url,
+            api_key=api_key,
+            budget=budget,
+            max_tokens=max_tokens,
+            tags=tags,
+            recall_tags=recall_tags,
+            recall_tags_match=recall_tags_match,
+            retain_metadata=retain_metadata,
+            retain_document_id=retain_document_id,
+            retain_context=retain_context,
+            recall_types=recall_types,
+            recall_include_entities=recall_include_entities,
+            reflect_context=reflect_context,
+            reflect_max_tokens=reflect_max_tokens,
+            reflect_response_schema=reflect_response_schema,
+            reflect_tags=reflect_tags,
+            reflect_tags_match=reflect_tags_match,
+            mission=mission,
+        )
+
+        self._backend = _HindsightToolBackend(client=client, **backend_kwargs)
+        self._backend_kwargs = backend_kwargs
+        self._auto_recall = auto_recall
+        self._auto_retain = auto_retain
+        self._memory_prompt_template = memory_prompt_template
+        self._include_retain = include_retain
+        self._include_recall = include_recall
+        self._include_reflect = include_reflect
+
+        tools = _build_tools(
+            self._backend,
+            backend_kwargs,
+            include_retain=include_retain,
+            include_recall=include_recall,
+            include_reflect=include_reflect,
+        )
+        super().__init__(tools=tools)
+
+    def _recall_for_prompt(self, query: str) -> str:
+        """Recall memories and format for system prompt injection."""
+        result = self._backend.recall_memory(query)
+        if result == "No relevant memories found." or result.startswith("Failed to"):
+            return ""
+        return result
+
+    @staticmethod
+    def _extract_last_user_text(messages: list[ChatMessage]) -> str:
+        """Extract the text of the last user message."""
+        for msg in reversed(messages):
+            if msg.role.value == "user" and msg.text:
+                return msg.text
+        return ""
+
+    def _enrich_system_prompt(self, base_prompt: Optional[str], query: str) -> Optional[str]:
+        """Recall memories and append to the system prompt."""
+        memories = self._recall_for_prompt(query)
+        if not memories:
+            return base_prompt
+        memory_block = self._memory_prompt_template.format(memories=memories)
+        if base_prompt:
+            return f"{base_prompt}\n\n{memory_block}"
+        return memory_block
+
+    def _retain_messages(self, messages: list[ChatMessage]) -> None:
+        """Retain user and assistant messages to Hindsight."""
+        for msg in messages:
+            role = msg.role.value
+            if role in ("user", "assistant") and msg.text:
+                try:
+                    self._backend.retain_memory(msg.text)
+                except Exception as e:
+                    logger.error(f"Auto-retain failed for {role} message: {e}")
+
+    def run(
+        self,
+        agent: Any,
+        *,
+        messages: list[ChatMessage],
+        system_prompt: Optional[str] = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Run an agent with auto-recall and auto-retain.
+
+        Wraps ``agent.run()`` with automatic memory behavior:
+
+        1. **Auto-recall** (if enabled): Recalls memories relevant to the
+           user's message and prepends them to the system prompt.
+        2. **Agent execution**: Calls ``agent.run()`` with the enriched
+           system prompt.
+        3. **Auto-retain** (if enabled): Retains the user messages and the
+           agent's final response to Hindsight.
+
+        Args:
+            agent: A Haystack ``Agent`` instance.
+            messages: User messages to process.
+            system_prompt: Base system prompt. If None, uses the agent's
+                configured ``system_prompt``.
+            **kwargs: Additional kwargs passed to ``agent.run()``.
+
+        Returns:
+            The result dict from ``agent.run()``.
+        """
+        base_prompt = system_prompt if system_prompt is not None else getattr(agent, "system_prompt", None)
+
+        # Auto-recall: enrich system prompt with relevant memories
+        effective_prompt = base_prompt
+        if self._auto_recall:
+            user_text = self._extract_last_user_text(messages)
+            if user_text:
+                effective_prompt = self._enrich_system_prompt(base_prompt, user_text)
+
+        result = agent.run(messages=messages, system_prompt=effective_prompt, **kwargs)
+
+        # Auto-retain: store user messages and agent response
+        if self._auto_retain:
+            self._retain_messages(messages)
+            last_msg = result.get("last_message")
+            if last_msg and last_msg.role.value == "assistant" and last_msg.text:
+                self._retain_messages([last_msg])
+
+        return result
+
+    async def run_async(
+        self,
+        agent: Any,
+        *,
+        messages: list[ChatMessage],
+        system_prompt: Optional[str] = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Async version of :meth:`run`.
+
+        Uses the same persistent event loop bridge internally, so auto-recall
+        and auto-retain work identically to the sync version.
+
+        Args:
+            agent: A Haystack ``Agent`` instance.
+            messages: User messages to process.
+            system_prompt: Base system prompt override.
+            **kwargs: Additional kwargs passed to ``agent.run_async()``.
+
+        Returns:
+            The result dict from ``agent.run_async()``.
+        """
+        base_prompt = system_prompt if system_prompt is not None else getattr(agent, "system_prompt", None)
+
+        effective_prompt = base_prompt
+        if self._auto_recall:
+            user_text = self._extract_last_user_text(messages)
+            if user_text:
+                effective_prompt = self._enrich_system_prompt(base_prompt, user_text)
+
+        result = await agent.run_async(messages=messages, system_prompt=effective_prompt, **kwargs)
+
+        if self._auto_retain:
+            self._retain_messages(messages)
+            last_msg = result.get("last_message")
+            if last_msg and last_msg.role.value == "assistant" and last_msg.text:
+                self._retain_messages([last_msg])
+
+        return result
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize the toolset to a dictionary."""
+        cls = type(self)
+        qualified_name = f"{cls.__module__}.{cls.__qualname__}"
+        return {
+            "type": qualified_name,
+            "data": {
+                "backend_kwargs": self._backend_kwargs,
+                "include_retain": self._include_retain,
+                "include_recall": self._include_recall,
+                "include_reflect": self._include_reflect,
+                "auto_recall": self._auto_recall,
+                "auto_retain": self._auto_retain,
+                "memory_prompt_template": self._memory_prompt_template,
+            },
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "HindsightToolset":
+        """Deserialize the toolset from a dictionary."""
+        inner = data["data"]
+        backend_kwargs = inner["backend_kwargs"]
+        return cls(
+            **backend_kwargs,
+            include_retain=inner.get("include_retain", True),
+            include_recall=inner.get("include_recall", True),
+            include_reflect=inner.get("include_reflect", True),
+            auto_recall=inner.get("auto_recall", False),
+            auto_retain=inner.get("auto_retain", False),
+            memory_prompt_template=inner.get("memory_prompt_template", DEFAULT_MEMORY_PROMPT),
+        )
