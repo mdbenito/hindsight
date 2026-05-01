@@ -669,3 +669,42 @@ class TestConfigFallback:
             retain_tool.invoke(content="content")
             call_kwargs = mock_instance.aretain.call_args[1]
             assert call_kwargs["context"] == "my-app"
+
+
+class TestRunSync:
+    """Verify the _run_sync helper works in both event-loop contexts."""
+
+    def test_run_sync_without_running_loop(self):
+        """Direct asyncio.run path — no event loop active."""
+        from hindsight_haystack.tools import _run_sync
+
+        async def coro():
+            return 42
+
+        assert _run_sync(coro()) == 42
+
+    def test_run_sync_inside_running_loop(self):
+        """Thread-pool path — called from within a running event loop."""
+        import asyncio
+
+        from hindsight_haystack.tools import _run_sync
+
+        async def inner():
+            return "from_thread"
+
+        async def outer():
+            # _run_sync is called while an event loop is running
+            return _run_sync(inner())
+
+        result = asyncio.run(outer())
+        assert result == "from_thread"
+
+    def test_run_sync_propagates_errors(self):
+        """Exceptions from the coroutine should propagate through."""
+        from hindsight_haystack.tools import _run_sync
+
+        async def failing():
+            raise ValueError("test error")
+
+        with pytest.raises(ValueError, match="test error"):
+            _run_sync(failing())

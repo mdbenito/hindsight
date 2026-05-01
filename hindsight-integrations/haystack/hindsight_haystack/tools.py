@@ -5,8 +5,8 @@ instances backed by Hindsight's retain/recall/reflect APIs.
 """
 
 import asyncio
-import concurrent.futures
 import logging
+import threading
 import uuid
 from typing import Any, Optional
 
@@ -19,23 +19,33 @@ from .config import get_config
 logger = logging.getLogger(__name__)
 
 
-def _run_sync(coro):  # type: ignore[no-untyped-def]
-    """Run an async coroutine synchronously, even inside a running event loop.
+# Persistent event loop in a daemon thread for async Hindsight client calls.
+# aiohttp binds its session to the event loop that created it, so every call
+# must use the *same* loop.  ``asyncio.run()`` creates and closes a fresh loop
+# each time, which breaks aiohttp on subsequent calls.  We keep one loop alive
+# in a background thread and submit coroutines to it via run_coroutine_threadsafe.
+_loop = asyncio.new_event_loop()
 
-    The hindsight_client's built-in sync methods (retain, recall, reflect) use
-    ``loop.run_until_complete()`` internally, which raises when called from
-    within an already-running event loop — e.g., inside Haystack's agent
-    runtime.  This helper detects that situation and offloads the coroutine
-    to a fresh thread with its own event loop.
+
+def _start_loop() -> None:
+    asyncio.set_event_loop(_loop)
+    _loop.run_forever()
+
+
+threading.Thread(target=_start_loop, daemon=True).start()
+
+
+def _run_sync(coro):  # type: ignore[no-untyped-def]
+    """Run an async coroutine synchronously from any context.
+
+    Haystack's ``Tool`` requires sync callables, but the hindsight_client's
+    async methods (aretain, arecall, areflect) must be awaited.  This helper
+    submits the coroutine to a persistent background event loop and blocks
+    until the result is ready.  Works regardless of whether the caller is
+    inside a running event loop (e.g., Haystack's agent runtime) or not.
     """
-    try:
-        asyncio.get_running_loop()
-        # We're inside a running loop — run in a worker thread.
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            return pool.submit(asyncio.run, coro).result()
-    except RuntimeError:
-        # No running loop — safe to use asyncio.run directly.
-        return asyncio.run(coro)
+    future = asyncio.run_coroutine_threadsafe(coro, _loop)
+    return future.result()
 
 
 class _HindsightToolBackend:
@@ -422,7 +432,9 @@ def create_hindsight_tools(
         List of Haystack Tool instances.
 
     Raises:
-        HindsightError: If no client or API URL can be resolved.
+        HindsightError: If no client or API URL can be resolved during
+            tool creation. Tool invocations return error strings instead
+            of raising.
     """
     # Build kwargs dict for backend (used for both instantiation and serialization).
     # The client object can't be serialized, so extract its connection info

@@ -14,11 +14,6 @@ except metadata.PackageNotFoundError:
     _VERSION = "0.0.0"
 _USER_AGENT = f"hindsight-haystack/{_VERSION}"
 
-# Per-operation timeouts (seconds)
-TIMEOUT_RETAIN = 15.0
-TIMEOUT_RECALL = 10.0
-TIMEOUT_REFLECT = 30.0
-TIMEOUT_BANK = 15.0
 TIMEOUT_DEFAULT = 30.0
 
 
