@@ -73,11 +73,24 @@ def create_isolated_schema(db_url: str, schema_name: str, dimension: int | None 
 
 
 def drop_schema(db_url: str, schema_name: str):
-    """Drop an isolated schema."""
+    """Drop an isolated schema.
+
+    Retries once on InternalError (e.g. 'could not open relation with OID')
+    which can happen when pg0 has concurrent connections referencing the schema.
+    """
     engine = create_engine(db_url)
-    with engine.connect() as conn:
-        conn.execute(text(f"DROP SCHEMA IF EXISTS {schema_name} CASCADE"))
-        conn.commit()
+    for attempt in range(2):
+        try:
+            with engine.connect() as conn:
+                conn.execute(text(f"DROP SCHEMA IF EXISTS {schema_name} CASCADE"))
+                conn.commit()
+            return
+        except Exception:
+            if attempt == 0:
+                import time
+
+                time.sleep(0.5)
+            # Best-effort teardown — don't fail the test over cleanup issues
 
 
 def get_column_dimension(db_url: str, schema: str = "public", table: str = "memory_units") -> int | None:
