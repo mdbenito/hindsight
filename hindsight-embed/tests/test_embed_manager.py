@@ -130,6 +130,34 @@ def test_find_api_command_prefers_installed_binary_over_uvx(tmp_path, monkeypatc
     assert manager._find_api_command() == [str(api_binary)]
 
 
+def test_find_api_command_target_install_uses_file_relative_fallback(tmp_path, monkeypatch):
+    """
+    When installed with `pip install --target`, sysconfig still points at the
+    system/venv scripts dir (no binary there). The __file__-relative fallback
+    should find the sibling binary in <target>/bin/ (issue #1240).
+    """
+    # sysconfig points to an empty venv scripts dir (no binary)
+    venv_scripts = tmp_path / "venv_bin"
+    venv_scripts.mkdir()
+
+    # --target layout: binary sits next to site-packages contents
+    target_dir = tmp_path / "target"
+    pkg_dir = target_dir / "hindsight_embed"
+    pkg_dir.mkdir(parents=True)
+    fake_module = pkg_dir / "daemon_embed_manager.py"
+    fake_module.write_text("")
+    sibling_bin = target_dir / "bin" / "hindsight-api"
+    sibling_bin.parent.mkdir()
+    sibling_bin.touch()
+
+    manager = DaemonEmbedManager()
+    monkeypatch.setattr("hindsight_embed.daemon_embed_manager.__file__", str(fake_module))
+    monkeypatch.setattr("hindsight_embed.daemon_embed_manager.sysconfig.get_path", lambda key: str(venv_scripts))
+    monkeypatch.setattr("hindsight_embed.daemon_embed_manager.platform.system", lambda: "Linux")
+
+    assert manager._find_api_command() == [str(sibling_bin)]
+
+
 def test_find_api_command_falls_back_to_uvx_when_no_binary(tmp_path, monkeypatch):
     """Without an installed binary or dev checkout, fall back to uvx."""
     scripts_dir = tmp_path / "bin"
