@@ -11,9 +11,9 @@ image: /img/blog/agent-harness-needs-memory.png
 
 Pick any modern agent harness — [Claude Code](https://docs.claude.com/en/docs/claude-code), [Cursor](https://cursor.com), OpenClaw, Hermes, [Codex](https://github.com/openai/codex), [Aider](https://aider.chat), Cline, Roo Code, [Pipecat](https://github.com/pipecat-ai/pipecat). They have all gotten dramatically better in the last 18 months. They have file access. They have shell access. They have [MCP](https://modelcontextprotocol.io) servers. They have browser control. They have rich IDE integrations and slash commands and skills and subagents.
 
-What almost none of them ship with is memory.
+What almost none of them ship with is memory that learns.
 
-The harness is the part of an agent system that wraps the model: it manages the loop, exposes tools, coordinates subagents, handles permissions, and renders output. It is the infrastructure between you and the LLM. And the harness layer is where memory most obviously belongs — but it is also the layer where memory has been most obviously skipped.
+The harness is the part of an agent system that wraps the model: it manages the loop, exposes tools, coordinates subagents, handles permissions, and renders output. It is the infrastructure between you and the LLM. And the harness layer is where long-term memory most obviously belongs — but it is also the layer where most harnesses have stopped at the filesystem and a static context file and called it done.
 
 <!-- truncate -->
 
@@ -36,9 +36,9 @@ The **model** is the LLM. Claude, GPT, Gemini, Qwen, whatever you point the harn
 
 The **harness** is the runtime around the model. It owns the agent loop, the tool registry, the permissions, the prompt assembly, the rendering. Claude Code is a harness. OpenClaw is a harness. Cursor is a harness with a chat UI bolted onto an editor. Hermes is a harness oriented around long-running agents.
 
-The **agent** is what emerges when a harness drives a model against a goal using tools. It is not a thing you install — it is the runtime behavior of the harness plus the model plus the prompt.
+The **agent** is what emerges when a harness drives a model against a goal using tools. It is not a thing you install — it is the runtime behavior of the harness plus the model plus the prompt. The framing **Agent = Model + Harness** has become the standard way to describe this split — see [OpenAI on harness engineering](https://openai.com/index/harness-engineering/), [Martin Fowler on harness engineering for coding agents](https://martinfowler.com/articles/harness-engineering.html), and [LangChain's anatomy of an agent harness](https://www.langchain.com/blog/the-anatomy-of-an-agent-harness) for three anchoring takes.
 
-When people say "agents are forgetful," what they usually mean is "harnesses are stateless." The model was never going to remember anything across sessions; that was always going to be the harness's job. And right now, almost no harness does it.
+When people say "agents are forgetful," what they usually mean is "harnesses do not learn." The model was never going to remember anything across sessions; that was always going to be the harness's job. The harness *does* have a memory primitive — the filesystem, plus a static instructions file that gets re-read every session — but neither of those compounds. Nothing the agent learns from the work feeds back in.
 
 ---
 
@@ -60,7 +60,7 @@ Before talking about the gap, it is worth acknowledging how much progress harnes
 
 That is a lot of progress. The harness used to be a thin loop around the model; now it is a serious runtime.
 
-What it still cannot do, in almost every case, is remember anything.
+What it still cannot do well, in almost every case, is *learn*. The harness can persist files. It can re-read a `CLAUDE.md` every morning. What it cannot do is accumulate understanding from the work itself and have that understanding shape the next session.
 
 ---
 
@@ -84,7 +84,11 @@ You can feel this most acutely in coding harnesses, because coding is iterative 
 
 ## The Workarounds — And Why They Are Not Enough
 
-The harness ecosystem has settled on a few partial answers. They help. They are not memory.
+The harness ecosystem has settled on a few partial answers. They help. None of them is learning memory.
+
+### The filesystem
+
+Most harnesses treat the filesystem as the de facto memory layer — write a file, read it back next session. It is the most foundational primitive a harness has, and for a lot of tasks it works fine. The limit is that the harness is doing the writing and the reading, but no one is doing the *organizing*. There is no synthesis, no relevance ranking, no decay. Files pile up. The agent has to know exactly which file to open. It is a hard drive, not a memory.
 
 ### Static context files (CLAUDE.md, AGENTS.md, .cursorrules)
 
