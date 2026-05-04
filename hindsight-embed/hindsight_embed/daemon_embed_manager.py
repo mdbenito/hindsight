@@ -10,6 +10,7 @@ import os
 import platform
 import re
 import subprocess
+import sysconfig
 import time
 from pathlib import Path
 from typing import IO, Optional
@@ -132,16 +133,16 @@ class DaemonEmbedManager(EmbedManager):
         if dev_api_path.exists() and (dev_api_path / "pyproject.toml").exists():
             return ["uv", "run", "--project", str(dev_api_path), "--extra", "all", "hindsight-api"]
 
-        # Prefer a hindsight-api entry point installed alongside hindsight-embed
-        # (e.g. `uv pip install hindsight-all` or `--target`). Falling through
-        # to uvx in that case downloads a standalone Python whose ABI won't
-        # match the sibling site-packages' C extensions (issue #1240).
-        package_root = Path(__file__).parent.parent
+        # Prefer a hindsight-api entry point installed alongside hindsight-embed.
+        # Use sysconfig to locate the venv's scripts directory (<venv>/bin on
+        # POSIX, <venv>/Scripts on Windows) instead of guessing relative to
+        # __file__, which points into site-packages/ and misses the real
+        # scripts dir in stock pip/venv installs (issue #1401).
         binary_name = "hindsight-api.exe" if platform.system() == "Windows" else "hindsight-api"
-        for bin_dir in ("bin", "Scripts"):
-            candidate = package_root / bin_dir / binary_name
-            if candidate.exists():
-                return [str(candidate)]
+        scripts_dir = Path(sysconfig.get_path("scripts"))
+        candidate = scripts_dir / binary_name
+        if candidate.exists():
+            return [str(candidate)]
 
         # Fall back to uvx for installed version
         from . import __version__
