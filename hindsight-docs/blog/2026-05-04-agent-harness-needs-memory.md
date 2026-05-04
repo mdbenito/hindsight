@@ -239,10 +239,10 @@ If your harness has every tool you need and you still feel like the agent is sta
 
 ## Further Reading
 
-- [Your Agent Is Not Forgetful. It Was Never Given a Memory.](https://hindsight.vectorize.io/blog/your-agent-is-not-forgetful) — the broader case for agent memory, of which the harness layer is one slice
-- [Hindsight Is Now a Native Memory Provider in Hermes Agent](https://hindsight.vectorize.io/blog/hermes-native-memory-provider) — the integration story behind the memory-as-harness-feature pattern
-- [Your OpenClaw Agents Are Strangers to Each Other. Hindsight Changes That.](https://hindsight.vectorize.io/blog/openclaw-shared-memory) — multi-surface gateway pattern in detail
-- [Adding Persistent Memory to OpenAI Codex with Hindsight](https://hindsight.vectorize.io/blog/adding-memory-to-codex-with-hindsight) — what shared memory looks like in a coding-agent harness
+- [Your Agent Is Not Forgetful. It Was Never Given a Memory.](https://hindsight.vectorize.io/blog/2026/04/23/your-agent-is-not-forgetful) — the broader case for agent memory, of which the harness layer is one slice
+- [Hindsight Is Now a Native Memory Provider in Hermes Agent](https://hindsight.vectorize.io/blog/2026/04/06/hermes-native-memory-provider) — the integration story behind the memory-as-harness-feature pattern
+- [Your OpenClaw Agents Are Strangers to Each Other. Hindsight Changes That.](https://hindsight.vectorize.io/blog/2026/04/01/openclaw-shared-memory) — multi-surface gateway pattern in detail
+- [Adding Persistent Memory to OpenAI Codex with Hindsight](https://hindsight.vectorize.io/blog/2026/04/08/adding-memory-to-codex-with-hindsight) — what shared memory looks like in a coding-agent harness
 - [Hindsight integrations](https://hindsight.vectorize.io/sdks/integrations) — the current list of supported harnesses and frameworks
 
 ---
