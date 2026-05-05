@@ -31,13 +31,17 @@ class RecallTool(Tool):
         max_tokens = int(tool_parameters.get("max_tokens") or 4096)
         tags = parse_tags(tool_parameters.get("tags"))
 
-        response = client.recall(
-            bank_id=bank_id,
-            query=query,
-            budget=budget,
-            max_tokens=max_tokens,
-            tags=tags,
-        )
+        try:
+            response = client.recall(
+                bank_id=bank_id,
+                query=query,
+                budget=budget,
+                max_tokens=max_tokens,
+                tags=tags,
+            )
+        except Exception as e:
+            yield self.create_text_message(f"Hindsight recall failed: {e}")
+            return
 
         results = [_memory_to_dict(m) for m in (response.results or [])]
 
@@ -58,11 +62,9 @@ class RecallTool(Tool):
 
 
 def _memory_to_dict(memory: Any) -> dict[str, Any]:
-    """Best-effort conversion of a Memory result to a JSON-serializable dict."""
+    """Convert a Memory result to a JSON-serializable dict."""
     if hasattr(memory, "model_dump"):
         return memory.model_dump(exclude_none=True)
-    if hasattr(memory, "dict"):
-        return memory.dict(exclude_none=True)
     return {
         "id": getattr(memory, "id", None),
         "text": getattr(memory, "text", None),

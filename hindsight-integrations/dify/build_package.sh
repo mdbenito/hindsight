@@ -27,4 +27,4 @@ rm -f "$OUTPUT_FILE"
 ( cd "$TEMP_DIR" && zip -r -D -q "$OLDPWD/$OUTPUT_FILE" . )
 rm -rf "$TEMP_DIR"
 
-echo "✅ Created $(pwd)/${OUTPUT_FILE} ($(du -h "$OUTPUT_FILE" | cut -f1))"
+echo "Created $(pwd)/${OUTPUT_FILE} ($(du -h "$OUTPUT_FILE" | cut -f1))"

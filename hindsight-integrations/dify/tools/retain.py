@@ -29,7 +29,11 @@ class RetainTool(Tool):
         client = build_client(self.runtime.credentials)
         tags = parse_tags(tool_parameters.get("tags"))
 
-        response = client.retain(bank_id=bank_id, content=content, tags=tags)
+        try:
+            response = client.retain(bank_id=bank_id, content=content, tags=tags)
+        except Exception as e:
+            yield self.create_text_message(f"Hindsight retain failed: {e}")
+            return
 
         result: dict[str, Any] = {
             "success": getattr(response, "success", True),

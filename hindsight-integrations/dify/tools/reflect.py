@@ -27,9 +27,14 @@ class ReflectTool(Tool):
             return
 
         client = build_client(self.runtime.credentials)
+        # Reflect defaults to "low" budget since it involves LLM synthesis (more expensive)
         budget = tool_parameters.get("budget") or "low"
 
-        response = client.reflect(bank_id=bank_id, query=query, budget=budget)
+        try:
+            response = client.reflect(bank_id=bank_id, query=query, budget=budget)
+        except Exception as e:
+            yield self.create_text_message(f"Hindsight reflect failed: {e}")
+            return
 
         text = getattr(response, "text", "") or ""
         yield self.create_json_message({"text": text})

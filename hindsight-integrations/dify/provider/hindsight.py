@@ -6,7 +6,6 @@ Validates API URL + optional API key by hitting Hindsight's /health endpoint.
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import urljoin
 
 import requests
 from dify_plugin import ToolProvider
@@ -25,7 +24,7 @@ class HindsightProvider(ToolProvider):
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
         try:
-            resp = requests.get(urljoin(api_url + "/", "health"), headers=headers, timeout=10)
+            resp = requests.get(f"{api_url}/health", headers=headers, timeout=10)
         except requests.RequestException as e:
             raise ToolProviderCredentialValidationError(
                 f"Could not reach Hindsight at {api_url}: {e}"
