@@ -1,6 +1,7 @@
 ---
 name: create-agent
 description: Create a new Hindsight-powered subagent with long-term memory. Use when the user wants a specialized agent that learns and remembers across sessions.
+allowed-tools: Bash(ls ~/.self-driving-agents/*) Bash(cat ~/.self-driving-agents/*) Write
 ---
 
 # Create Hindsight Agent
