@@ -1167,7 +1167,7 @@ jobs:
 
     - name: Run tests
       working-directory: ./hindsight-api-slim
-      run: uv run pytest tests -v
+      run: uv run pytest tests -v -m "not llm"
 
   test-api-oracle:
     needs: [detect-changes]
