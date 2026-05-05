@@ -2759,6 +2759,110 @@ class TestClaimBatchRotation:
         assert serviced == ["b", "b", "b"]
 
     @pytest.mark.asyncio
+    async def test_detect_marker_features_when_absent(self, pool):
+        """Returns (False, False) on a deployment without the marker table or
+        helper function, and caches the result so subsequent calls are free.
+
+        Regression guard for issue #1408: prior to feature detection, the
+        worker called ``schemas_with_pending_work()`` unconditionally and
+        relied on a Python ``except Exception: pass`` to suppress the error.
+        Postgres still logged a server-side ``ERROR: function ... does not
+        exist`` on every poll, which spammed PG logs on fresh installs.
+        """
+        from hindsight_api.worker import WorkerPoller
+
+        # Make sure neither helper is present.
+        await pool.execute("DROP TABLE IF EXISTS public.tenant_has_work")
+        await pool.execute("DROP FUNCTION IF EXISTS public.schemas_with_pending_work()")
+
+        poller = WorkerPoller(pool=pool, worker_id="test-detect-absent", executor=lambda x: None)
+
+        async with pool.acquire() as conn:
+            assert await poller._detect_marker_features(conn) == (False, False)
+        # Cache populated; second call must not re-query (we pass a connection
+        # that fails on use to prove we never touch it again).
+
+        class _ExplodingConn:
+            async def fetchrow(self, *_a, **_kw):
+                raise AssertionError("_detect_marker_features should be cached")
+
+        assert await poller._detect_marker_features(_ExplodingConn()) == (False, False)
+
+    @pytest.mark.asyncio
+    async def test_detect_marker_features_when_present(self, pool):
+        """Both objects detected when installed."""
+        from hindsight_api.worker import WorkerPoller
+
+        await pool.execute(
+            """
+            CREATE TABLE IF NOT EXISTS public.tenant_has_work (
+                nspname text PRIMARY KEY,
+                pending_count integer NOT NULL DEFAULT 0 CHECK (pending_count >= 0)
+            )
+            """
+        )
+        await pool.execute(
+            """
+            CREATE OR REPLACE FUNCTION public.schemas_with_pending_work()
+            RETURNS SETOF text AS $$
+                SELECT nspname FROM public.tenant_has_work WHERE pending_count > 0;
+            $$ LANGUAGE sql STABLE
+            """
+        )
+        try:
+            poller = WorkerPoller(pool=pool, worker_id="test-detect-present", executor=lambda x: None)
+            async with pool.acquire() as conn:
+                assert await poller._detect_marker_features(conn) == (True, True)
+        finally:
+            await pool.execute("DROP FUNCTION IF EXISTS public.schemas_with_pending_work()")
+            await pool.execute("DROP TABLE IF EXISTS public.tenant_has_work")
+
+    @pytest.mark.asyncio
+    async def test_scan_skips_missing_function_call(self, pool, clean_operations):
+        """When ``schemas_with_pending_work()`` is not installed,
+        ``_scan_active_schemas`` must not call it — even with a Python
+        ``except``, the server-side error log still fires (issue #1408).
+
+        We verify the gating by:
+          1. Asserting ``_detect_marker_features`` returns ``has_fn = False``
+             after dropping the function, AND
+          2. Calling ``_scan_active_schemas`` and confirming the per-schema
+             EXISTS fallback found the work — implying the gated code path
+             ran and the missing function was never queried.
+        """
+        from hindsight_api.worker import WorkerPoller
+
+        await pool.execute("DROP FUNCTION IF EXISTS public.schemas_with_pending_work()")
+
+        bank_id = f"test-worker-noisefree-{uuid.uuid4().hex[:8]}"
+        await _ensure_bank(pool, bank_id)
+
+        op_id = uuid.uuid4()
+        await pool.execute(
+            """INSERT INTO async_operations
+               (operation_id, bank_id, operation_type, status, task_payload)
+               VALUES ($1, $2, 'test', 'pending', $3::jsonb)""",
+            op_id,
+            bank_id,
+            json.dumps({"type": "test", "bank_id": bank_id}),
+        )
+        try:
+            poller = WorkerPoller(
+                pool=pool, worker_id="test-noise", executor=lambda x: None
+            )
+            # Confirm the cached detection has has_fn=False; without that,
+            # _scan_active_schemas would call the missing function and PG
+            # would log an ERROR per poll.
+            async with pool.acquire() as conn:
+                _, has_fn = await poller._detect_marker_features(conn)
+                assert has_fn is False, "Detection wrongly thinks the function exists"
+
+            result = await poller._scan_active_schemas([None])
+            assert None in result, "Per-schema EXISTS fallback failed to find pending work"
+        finally:
+            await pool.execute("DELETE FROM async_operations WHERE operation_id = $1", op_id)
+
+    @pytest.mark.asyncio
     async def test_scan_finds_schemas_with_pending_work(self, pool, clean_operations):
         """_scan_active_schemas identifies schemas with pending rows
         and ignores empty schemas. Uses real DB, no mocks.
