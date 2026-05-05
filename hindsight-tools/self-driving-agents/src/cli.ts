@@ -786,26 +786,38 @@ function resolveFromClaudeCode(agentId: string): {
 async function ensureClaudeCodePlugin(
   agentId: string
 ): Promise<{ apiUrl: string; bankId: string; apiToken?: string }> {
-  // Write or update config
-  const config = readClaudeCodeConfig() || {};
-  config.agentName = agentId;
-  config.enableKnowledgeTools = true;
+  const existingConfig = readClaudeCodeConfig();
 
-  // Always prompt for Hindsight connection — each agent install needs correct API + token
-  let resolvedApiUrl = config.hindsightApiUrl || `http://localhost:${config.apiPort || 9077}`;
+  // If plugin config already exists, use it as-is — don't overwrite
+  if (existingConfig && (existingConfig.hindsightApiUrl || existingConfig.llmProvider)) {
+    const apiUrl = existingConfig.hindsightApiUrl || `http://localhost:${existingConfig.apiPort || 9077}`;
+    const apiToken = existingConfig.hindsightApiToken || undefined;
+    // Bank ID comes from plugin's derivation logic at runtime — use agentId as default for ingestion
+    const bankId = agentId;
+    p.log.info(`Using existing Hindsight config: ${color.dim(apiUrl)}`);
+    return { apiUrl, bankId, apiToken };
+  }
+
+  // First time setup — prompt for connection
+  let resolvedApiUrl: string;
   let resolvedBankId = agentId;
-  let resolvedApiToken = config.hindsightApiToken || undefined;
+  let resolvedApiToken: string | undefined;
 
   if (process.stdin.isTTY) {
     const claudeConfig = await promptClaudeConfig(agentId);
-    config.hindsightApiUrl = claudeConfig.apiUrl;
-    config.hindsightApiToken = claudeConfig.apiToken;
-    config.dynamicBankId = false;
     resolvedApiUrl = claudeConfig.apiUrl;
     resolvedBankId = claudeConfig.bankId;
     resolvedApiToken = claudeConfig.apiToken;
+  } else {
+    throw new Error("No Hindsight config found. Run interactively to configure.");
   }
 
+  // Write initial config
+  const config: Record<string, any> = {
+    hindsightApiUrl: resolvedApiUrl,
+    hindsightApiToken: resolvedApiToken,
+    enableKnowledgeTools: true,
+  };
   writeClaudeCodeConfig(config);
 
   return { apiUrl: resolvedApiUrl, bankId: resolvedBankId, apiToken: resolvedApiToken };
