@@ -22,7 +22,7 @@ def enable_observations():
 
 
 @pytest.mark.asyncio
-@pytest.mark.hs_llm_mat
+@pytest.mark.hs_llm_core
 async def test_link_expansion_observation_graph_retrieval(memory_real_llm, request_context):
     """
     Test that observations can find other observations via shared entities.

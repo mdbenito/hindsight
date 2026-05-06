@@ -163,7 +163,7 @@ def _parse_history(hist: Any) -> list[str]:
 
 @pytest.mark.asyncio
 @pytest.mark.flaky(reruns=2, reruns_delay=5)
-@pytest.mark.hs_llm_mat
+@pytest.mark.hs_llm_core
 async def test_horse_farm_observation_history(memory_real_llm: MemoryEngine, request_context: Any) -> None:
     """Retain a sequence of horse facts and inspect how observations evolve."""
     memory = memory_real_llm

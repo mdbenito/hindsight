@@ -450,7 +450,8 @@ async def memory_real_llm(pg0_db_url, embeddings, cross_encoder, query_analyzer)
 
     Use this fixture ONLY for tests that assert on LLM output quality
     (fact extraction accuracy, language preservation, consolidation decisions, etc.).
-    These tests are non-deterministic and should be marked with @pytest.mark.hs_llm_mat.
+    These tests are non-deterministic and should be marked with @pytest.mark.hs_llm_core
+    (or @pytest.mark.hs_llm_mat for provider matrix acceptance tests).
     """
     mem = MemoryEngine(
         db_url=pg0_db_url,

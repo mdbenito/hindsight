@@ -25,7 +25,7 @@ _OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 _RUN = os.getenv("HINDSIGHT_RUN_GEMINI_EVALS") == "1" and (bool(_GEMINI_KEY) or bool(_OPENAI_KEY))
 pytestmark = [
     pytest.mark.skipif(not _RUN, reason="Set HINDSIGHT_RUN_GEMINI_EVALS=1 + LLM API key"),
-    pytest.mark.hs_llm_mat,
+    pytest.mark.hs_llm_core,
 ]
 
 # ---------------------------------------------------------------------------

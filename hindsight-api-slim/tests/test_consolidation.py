@@ -334,7 +334,7 @@ class TestConsolidationIntegration:
         await memory.delete_bank(bank_id, request_context=request_context)
 
     @pytest.mark.asyncio
-    @pytest.mark.hs_llm_mat
+    @pytest.mark.hs_llm_core
     async def test_consolidation_keeps_different_people_separate(self, memory_real_llm: MemoryEngine, request_context):
         """Test that consolidation NEVER merges facts about different people.
 
@@ -391,7 +391,7 @@ class TestConsolidationIntegration:
         await memory.delete_bank(bank_id, request_context=request_context)
 
     @pytest.mark.asyncio
-    @pytest.mark.hs_llm_mat
+    @pytest.mark.hs_llm_core
     async def test_consolidation_merges_contradictions(self, memory_real_llm: MemoryEngine, request_context):
         """Test that contradictions about the same topic are merged with history.
 
@@ -619,7 +619,7 @@ class TestRecallObservationFactType:
         await memory.delete_bank(bank_id, request_context=request_context)
 
 
-@pytest.mark.hs_llm_mat
+@pytest.mark.hs_llm_core
 class TestConsolidationTagRouting:
     """Test tag routing during consolidation.
 
@@ -1773,7 +1773,7 @@ class TestMentalModelRefreshAfterConsolidation:
         await memory.delete_bank(bank_id, request_context=request_context)
 
     @pytest.mark.asyncio
-    @pytest.mark.hs_llm_mat
+    @pytest.mark.hs_llm_core
     async def test_graph_endpoint_observations_inherit_links_and_entities(self, memory_real_llm: MemoryEngine, request_context):
         """Test that graph endpoint shows links and entities for observations filtered by type.
 

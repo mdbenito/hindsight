@@ -303,7 +303,7 @@ class MockLLM(LLMInterface):
                 break
 
         # Split on sentence boundaries: period followed by space/EOL (not mid-number), or newlines
-        sentences = [s.strip() for s in re.split(r'(?<=\.)\s+|\n+', user_text) if s.strip() and len(s.strip()) > 10]
+        sentences = [s.strip() for s in re.split(r"(?<=\.)\s+|\n+", user_text) if s.strip() and len(s.strip()) > 10]
 
         if not sentences:
             sentences = [user_text[:200] if user_text else "mock fact"]
@@ -311,19 +311,21 @@ class MockLLM(LLMInterface):
         facts = []
         for sentence in sentences[:10]:  # Cap at 10 facts per chunk
             # Extract simple entities: capitalized words that aren't common words
-            words = re.findall(r'\b[A-Z][a-z]+\b', sentence)
+            words = re.findall(r"\b[A-Z][a-z]+\b", sentence)
             entities = [{"text": w} for w in dict.fromkeys(words)][:5]  # Dedupe, cap at 5
 
-            facts.append({
-                "what": sentence,
-                "when": "N/A",
-                "where": "N/A",
-                "who": "N/A",
-                "why": "N/A",
-                "fact_kind": "conversation",
-                "fact_type": "world",
-                "entities": entities,
-            })
+            facts.append(
+                {
+                    "what": sentence,
+                    "when": "N/A",
+                    "where": "N/A",
+                    "who": "N/A",
+                    "why": "N/A",
+                    "fact_kind": "conversation",
+                    "fact_type": "world",
+                    "entities": entities,
+                }
+            )
 
         return {"facts": facts}
 
@@ -345,7 +347,7 @@ class MockLLM(LLMInterface):
                 break
 
         # Extract fact UUIDs from the prompt (format: "[<uuid>] <text>")
-        fact_entries = re.findall(r'\[([0-9a-f-]{36})\]\s*(.+?)(?:\n|$)', user_text)
+        fact_entries = re.findall(r"\[([0-9a-f-]{36})\]\s*(.+?)(?:\n|$)", user_text)
 
         if not fact_entries:
             # No facts to consolidate — return empty response

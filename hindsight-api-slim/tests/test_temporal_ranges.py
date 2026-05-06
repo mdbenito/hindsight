@@ -5,7 +5,7 @@ import pytest
 from hindsight_api.engine.memory_engine import Budget
 from hindsight_api import RequestContext
 
-pytestmark = pytest.mark.hs_llm_mat
+pytestmark = pytest.mark.hs_llm_core
 
 
 @pytest.mark.asyncio

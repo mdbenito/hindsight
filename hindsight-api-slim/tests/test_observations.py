@@ -357,7 +357,7 @@ async def test_entity_mention_ranking(memory, request_context):
 
 
 @pytest.mark.asyncio
-@pytest.mark.hs_llm_mat
+@pytest.mark.hs_llm_core
 async def test_user_entity_extraction(memory_real_llm, request_context):
     """
     Test that the 'user' entity is correctly extracted when mentioned frequently.

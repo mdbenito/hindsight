@@ -701,7 +701,7 @@ class TestDirectiveLeakageOnEmptyBank:
             await memory.delete_bank(bank_id, request_context=request_context)
 
 
-@pytest.mark.hs_llm_mat
+@pytest.mark.hs_llm_core
 class TestContextOverflowIntegration:
     """Integration test: real LLM with a very small max_context_tokens.
 

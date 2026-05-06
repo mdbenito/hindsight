@@ -13,7 +13,7 @@ from hindsight_api import RequestContext
 
 logger = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.hs_llm_mat
+pytestmark = pytest.mark.hs_llm_core
 
 
 @pytest.mark.asyncio

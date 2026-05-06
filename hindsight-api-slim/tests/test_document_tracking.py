@@ -206,7 +206,7 @@ async def test_document_without_metadata(memory, request_context):
 
 
 @pytest.mark.asyncio
-@pytest.mark.hs_llm_mat
+@pytest.mark.hs_llm_core
 async def test_document_persisted_with_zero_facts(memory_real_llm, request_context):
     """
     Test that documents are persisted even when zero facts are extracted.
@@ -260,7 +260,7 @@ async def test_document_persisted_with_zero_facts(memory_real_llm, request_conte
 
 
 @pytest.mark.asyncio
-@pytest.mark.hs_llm_mat
+@pytest.mark.hs_llm_core
 async def test_document_persisted_with_zero_facts_batch(memory_real_llm, request_context):
     """
     Test that documents are persisted with zero facts in batch retain operations.
@@ -318,7 +318,7 @@ async def test_document_persisted_with_zero_facts_batch(memory_real_llm, request
 
 
 @pytest.mark.asyncio
-@pytest.mark.hs_llm_mat
+@pytest.mark.hs_llm_core
 async def test_document_persisted_with_zero_facts_async_submit(memory_real_llm, request_context):
     """
     Test that documents are persisted with zero facts in fire-and-forget async retain.

@@ -378,7 +378,7 @@ class TestReflect:
 class TestDirectivesInReflect:
     """Test that directives are followed during reflect operations."""
 
-    @pytest.mark.hs_llm_mat
+    @pytest.mark.hs_llm_core
     async def test_reflect_follows_language_directive(self, memory_real_llm: MemoryEngine, request_context):
         """Test that reflect follows a directive to respond in a specific language."""
         memory = memory_real_llm
@@ -1216,7 +1216,7 @@ class TestMentalModelStaleness:
         await memory.delete_bank(bank_id, request_context=request_context)
 
 
-@pytest.mark.hs_llm_mat
+@pytest.mark.hs_llm_core
 class TestMentalModelRefreshTagSecurity:
 
     @pytest.fixture
@@ -1492,7 +1492,7 @@ class TestMentalModelRefreshTagSecurity:
         await memory.delete_bank(bank_id, request_context=request_context)
 
 
-@pytest.mark.hs_llm_mat
+@pytest.mark.hs_llm_core
 class TestMentalModelTriggerTagsConfig:
     """Test trigger-level tags_match and tag_groups configuration for mental model refresh."""
 
