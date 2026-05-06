@@ -225,11 +225,13 @@ async def test_chunks_and_entities_follow_fact_order(memory, request_context):
 
 
 @pytest.mark.asyncio
-async def test_event_date_storage(memory, request_context):
+@pytest.mark.hs_llm_mat
+async def test_event_date_storage(memory_real_llm, request_context):
     """
     Test that event_date is correctly stored as occurred_start.
     Verifies that we can track when events actually happened vs when they were stored.
     """
+    memory = memory_real_llm
     bank_id = f"test_temporal_{datetime.now(timezone.utc).timestamp()}"
 
     try:

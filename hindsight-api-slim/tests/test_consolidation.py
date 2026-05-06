@@ -72,12 +72,11 @@ class TestConsolidationIntegration:
                 """,
                 bank_id,
             )
-            # Observation may or may not be created depending on LLM relevance judgment
-            # The important thing is no errors occurred
-            if observations:
-                obs = observations[0]
-                assert obs["proof_count"] >= 1
-                assert obs["fact_type"] == "observation"
+            # With the deterministic mock, consolidation always produces observations
+            assert len(observations) >= 1, "Consolidation must create at least one observation"
+            obs = observations[0]
+            assert obs["proof_count"] >= 1
+            assert obs["fact_type"] == "observation"
 
         # Cleanup
         await memory.delete_bank(bank_id, request_context=request_context)
@@ -116,13 +115,10 @@ class TestConsolidationIntegration:
                 bank_id,
             )
 
-            # Should have at least one observation
-            # If the LLM determined both memories support the same observation,
-            # proof_count might be > 1
-            if observations:
-                # Verify structure is correct
-                assert all(obs["text"] for obs in observations)
-                assert all(obs["proof_count"] >= 1 for obs in observations)
+            # Must have at least one observation from consolidation
+            assert len(observations) >= 1, "Consolidation must create observations from retained memories"
+            assert all(obs["text"] for obs in observations)
+            assert all(obs["proof_count"] >= 1 for obs in observations)
 
         # Cleanup
         await memory.delete_bank(bank_id, request_context=request_context)
@@ -221,19 +217,20 @@ class TestConsolidationIntegration:
                 bank_id,
             )
 
-            if observation:
-                # Check if entity links were copied
-                entity_links = await conn.fetch(
-                    """
-                    SELECT entity_id
-                    FROM unit_entities
-                    WHERE unit_id = $1
-                    """,
-                    observation["id"],
-                )
-                # Observation should have inherited entity links from source memory
-                # (may be empty if no entities were extracted, which is fine)
-                assert entity_links is not None
+            # Consolidation must create an observation
+            assert observation is not None, "Consolidation must create an observation"
+
+            # Check if entity links were copied
+            entity_links = await conn.fetch(
+                """
+                SELECT entity_id
+                FROM unit_entities
+                WHERE unit_id = $1
+                """,
+                observation["id"],
+            )
+            # Observation should have inherited entity links from source memory
+            assert entity_links is not None
 
         # Cleanup
         await memory.delete_bank(bank_id, request_context=request_context)
@@ -302,45 +299,48 @@ class TestConsolidationIntegration:
                 bank_id,
             )
 
-            if observation:
-                # Observation should have source_memory_ids
-                assert observation["source_memory_ids"] is not None, "Observation should have source_memory_ids"
-                assert len(observation["source_memory_ids"]) > 0, "Observation should have at least one source memory"
+            assert observation is not None, "Consolidation must create an observation"
 
-                source_memory_id = observation["source_memory_ids"][0]
+            # Observation should have source_memory_ids
+            assert observation["source_memory_ids"] is not None, "Observation should have source_memory_ids"
+            assert len(observation["source_memory_ids"]) > 0, "Observation should have at least one source memory"
 
-                # Verify the source memory exists
-                source_memory = await conn.fetchrow(
-                    """
-                    SELECT id, fact_type FROM memory_units WHERE id = $1
-                    """,
-                    source_memory_id,
-                )
-                assert source_memory is not None, "Source memory should exist"
-                assert source_memory["fact_type"] in ("world", "experience"), "Source should be a fact"
+            source_memory_id = observation["source_memory_ids"][0]
 
-                # No memory_links should exist between observation and source
-                # (observations rely on source_memory_ids for traversal)
-                links = await conn.fetch(
-                    """
-                    SELECT * FROM memory_links
-                    WHERE (from_unit_id = $1 AND to_unit_id = $2)
-                       OR (from_unit_id = $2 AND to_unit_id = $1)
-                    """,
-                    source_memory_id,
-                    observation["id"],
-                )
-                assert len(links) == 0, "No memory_links should exist between observation and source"
+            # Verify the source memory exists
+            source_memory = await conn.fetchrow(
+                """
+                SELECT id, fact_type FROM memory_units WHERE id = $1
+                """,
+                source_memory_id,
+            )
+            assert source_memory is not None, "Source memory should exist"
+            assert source_memory["fact_type"] in ("world", "experience"), "Source should be a fact"
+
+            # No memory_links should exist between observation and source
+            # (observations rely on source_memory_ids for traversal)
+            links = await conn.fetch(
+                """
+                SELECT * FROM memory_links
+                WHERE (from_unit_id = $1 AND to_unit_id = $2)
+                   OR (from_unit_id = $2 AND to_unit_id = $1)
+                """,
+                source_memory_id,
+                observation["id"],
+            )
+            assert len(links) == 0, "No memory_links should exist between observation and source"
 
         # Cleanup
         await memory.delete_bank(bank_id, request_context=request_context)
 
     @pytest.mark.asyncio
-    async def test_consolidation_keeps_different_people_separate(self, memory: MemoryEngine, request_context):
+    @pytest.mark.hs_llm_mat
+    async def test_consolidation_keeps_different_people_separate(self, memory_real_llm: MemoryEngine, request_context):
         """Test that consolidation NEVER merges facts about different people.
 
         Each person's facts should stay in separate observations.
         """
+        memory = memory_real_llm
         bank_id = f"test-consolidation-people-{uuid.uuid4().hex[:8]}"
 
         # Create the bank
@@ -391,7 +391,8 @@ class TestConsolidationIntegration:
         await memory.delete_bank(bank_id, request_context=request_context)
 
     @pytest.mark.asyncio
-    async def test_consolidation_merges_contradictions(self, memory: MemoryEngine, request_context):
+    @pytest.mark.hs_llm_mat
+    async def test_consolidation_merges_contradictions(self, memory_real_llm: MemoryEngine, request_context):
         """Test that contradictions about the same topic are merged with history.
 
         When facts contradict each other (same person, same topic, opposite info),
@@ -402,6 +403,7 @@ class TestConsolidationIntegration:
         - "Alex hates pizza"
         → Should become: "Alex used to love pizza but now hates it" (or similar)
         """
+        memory = memory_real_llm
         bank_id = f"test-consolidation-contradict-{uuid.uuid4().hex[:8]}"
 
         # Create the bank
@@ -617,6 +619,7 @@ class TestRecallObservationFactType:
         await memory.delete_bank(bank_id, request_context=request_context)
 
 
+@pytest.mark.hs_llm_mat
 class TestConsolidationTagRouting:
     """Test tag routing during consolidation.
 
@@ -626,6 +629,16 @@ class TestConsolidationTagRouting:
     - Different scopes (non-overlapping tags): create untagged cross-scope insight
     - No match: create with fact's tags
     """
+
+    @pytest.fixture(autouse=True)
+    def _use_real_llm(self, memory_real_llm):
+        """All tests in this class need a real LLM for consolidation."""
+        self._memory = memory_real_llm
+
+    @pytest.fixture
+    def memory(self, memory_real_llm):
+        """Override the memory fixture to use real LLM for this class."""
+        return memory_real_llm
 
     async def _retain_with_tags(
         self,
@@ -1098,22 +1111,23 @@ class TestConsolidationTagRouting:
                 bank_id,
             )
 
-            if observation:
-                # Observation should have inherited the date from the source memory
-                obs_occurred = observation["occurred_start"]
-                obs_event_date = observation["event_date"]
+            assert observation is not None, "Consolidation must create an observation"
 
-                # Dates should match the source memory's date (2023-06-15), not today
-                assert obs_occurred is not None, "Observation should have occurred_start"
-                assert obs_event_date is not None, "Observation should have event_date"
+            # Observation should have inherited the date from the source memory
+            obs_occurred = observation["occurred_start"]
+            obs_event_date = observation["event_date"]
 
-                # The date should be from 2023, not today
-                assert obs_occurred.year == 2023, (
-                    f"Expected occurred_start year 2023, got {obs_occurred.year}. "
-                    "Observation should inherit date from source memory."
-                )
-                assert obs_occurred.month == 6, f"Expected month 6, got {obs_occurred.month}"
-                assert obs_occurred.day == 15, f"Expected day 15, got {obs_occurred.day}"
+            # Dates should match the source memory's date (2023-06-15), not today
+            assert obs_occurred is not None, "Observation should have occurred_start"
+            assert obs_event_date is not None, "Observation should have event_date"
+
+            # The date should be from 2023, not today
+            assert obs_occurred.year == 2023, (
+                f"Expected occurred_start year 2023, got {obs_occurred.year}. "
+                "Observation should inherit date from source memory."
+            )
+            assert obs_occurred.month == 6, f"Expected month 6, got {obs_occurred.month}"
+            assert obs_occurred.day == 15, f"Expected day 15, got {obs_occurred.day}"
 
         # Cleanup
         await memory.delete_bank(bank_id, request_context=request_context)
@@ -1354,31 +1368,34 @@ class TestObservationDrillDown:
                 bank_id,
             )
 
-        if obs_rows:
-            obs = obs_rows[0]
-            source_ids = obs["source_memory_ids"] or []
+        assert obs_rows, "Consolidation must create observations"
 
-            # Verify source_memory_ids point to actual memories
-            if source_ids:
-                async with memory._pool.acquire() as conn:
-                    source_memories = await conn.fetch(
-                        """
-                        SELECT id, text FROM memory_units
-                        WHERE id = ANY($1) AND fact_type IN ('world', 'experience')
-                        """,
-                        source_ids,
-                    )
+        # Collect all source_memory_ids across all observations
+        all_source_ids = []
+        for obs in obs_rows:
+            all_source_ids.extend(obs["source_memory_ids"] or [])
 
-                # Should have found the source memories
-                assert len(source_memories) >= 1, (
-                    f"source_memory_ids should point to valid memories. "
-                    f"IDs: {source_ids}, Found: {len(source_memories)}"
-                )
+        assert all_source_ids, "Observations must have source_memory_ids"
 
-                # The source memories should contain our original content
-                source_texts = [m["text"].lower() for m in source_memories]
-                has_phoenix = any("phoenix" in t for t in source_texts)
-                assert has_phoenix, f"Source memories should contain original content. Got: {source_texts}"
+        # Verify source_memory_ids point to actual memories
+        async with memory._pool.acquire() as conn:
+            source_memories = await conn.fetch(
+                """
+                SELECT id, text FROM memory_units
+                WHERE id = ANY($1) AND fact_type IN ('world', 'experience')
+                """,
+                all_source_ids,
+            )
+
+        assert len(source_memories) >= 1, (
+            f"source_memory_ids should point to valid memories. "
+            f"IDs: {all_source_ids}, Found: {len(source_memories)}"
+        )
+
+        # The source memories should contain our original content
+        source_texts = [m["text"].lower() for m in source_memories]
+        has_phoenix = any("phoenix" in t for t in source_texts)
+        assert has_phoenix, f"Source memories should contain original content. Got: {source_texts}"
 
         # Cleanup
         await memory.delete_bank(bank_id, request_context=request_context)
@@ -1479,6 +1496,7 @@ class TestHierarchicalRetrieval:
         # Cleanup
         await memory.delete_bank(bank_id, request_context=request_context)
 
+    @pytest.mark.asyncio
     @pytest.mark.asyncio
     async def test_fallback_to_observation_when_no_mental_model(self, memory: MemoryEngine, request_context):
         """Test that observations are used when no mental model matches.
@@ -1755,7 +1773,8 @@ class TestMentalModelRefreshAfterConsolidation:
         await memory.delete_bank(bank_id, request_context=request_context)
 
     @pytest.mark.asyncio
-    async def test_graph_endpoint_observations_inherit_links_and_entities(self, memory: MemoryEngine, request_context):
+    @pytest.mark.hs_llm_mat
+    async def test_graph_endpoint_observations_inherit_links_and_entities(self, memory_real_llm: MemoryEngine, request_context):
         """Test that graph endpoint shows links and entities for observations filtered by type.
 
         When filtering graph by type=observation:
@@ -1763,6 +1782,7 @@ class TestMentalModelRefreshAfterConsolidation:
         - Observations should show entities inherited from source memories
         - Even when source memories are not visible, their links should be copied to observations
         """
+        memory = memory_real_llm
         bank_id = f"test-graph-obs-{uuid.uuid4().hex[:8]}"
 
         # Create the bank

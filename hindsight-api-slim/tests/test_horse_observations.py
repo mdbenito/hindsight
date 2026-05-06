@@ -163,8 +163,10 @@ def _parse_history(hist: Any) -> list[str]:
 
 @pytest.mark.asyncio
 @pytest.mark.flaky(reruns=2, reruns_delay=5)
-async def test_horse_farm_observation_history(memory: MemoryEngine, request_context: Any) -> None:
+@pytest.mark.hs_llm_mat
+async def test_horse_farm_observation_history(memory_real_llm: MemoryEngine, request_context: Any) -> None:
     """Retain a sequence of horse facts and inspect how observations evolve."""
+    memory = memory_real_llm
     bank_id = f"test-horses-{uuid.uuid4().hex[:8]}"
 
     await memory.get_bank_profile(bank_id=bank_id, request_context=request_context)

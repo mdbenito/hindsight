@@ -291,12 +291,11 @@ async def test_entity_mention_ranking(memory, request_context):
     bank_id = f"test_ranking_{datetime.now(timezone.utc).timestamp()}"
 
     try:
-        # Phase 1: Create "OriginalEntity" with 6 mentions
-        print("\n=== Phase 1: Create OriginalEntity with 6 mentions ===")
+        # Phase 1: Create "Alice" with 6 mentions
         for i in range(6):
             await memory.retain_async(
                 bank_id=bank_id,
-                content=f"OriginalEntity is mentioned here in fact {i+1}.",
+                content=f"Alice is mentioned here in fact {i+1}.",
                 context="test",
                 event_date=datetime(2024, 1, 1 + i, tzinfo=timezone.utc),
                 request_context=request_context,
@@ -304,10 +303,8 @@ async def test_entity_mention_ranking(memory, request_context):
 
         await memory.wait_for_background_tasks()
 
-        # Phase 2: Add more entities with MORE mentions
-        print("\n=== Phase 2: Add entities with 10+ mentions each ===")
-        for entity_num in range(3):  # Reduced from 10 to 3 to speed up test
-            entity_name = f"NewEntity{entity_num}"
+        # Phase 2: Add entities with MORE mentions (10 each)
+        for entity_num, entity_name in enumerate(["Bruno", "Carlos", "Diana"]):
             for mention in range(10):
                 await memory.retain_async(
                     bank_id=bank_id,
@@ -337,20 +334,19 @@ async def test_entity_mention_ranking(memory, request_context):
         for e in all_entities:
             print(f"  {e['canonical_name']}: mentions={e['mention_count']}")
 
-        # Verify new entities have higher counts than OriginalEntity
-        original = next((e for e in all_entities if 'originalentity' in e['canonical_name'].lower()), None)
-        new_entities = [e for e in all_entities if 'newentity' in e['canonical_name'].lower()]
+        # Verify high-mention entities rank higher than Alice (6 mentions)
+        alice = next((e for e in all_entities if 'alice' in e['canonical_name'].lower()), None)
+        high_mention = [e for e in all_entities if e['canonical_name'].lower() in ('bruno', 'carlos', 'diana')]
 
-        assert original is not None, "OriginalEntity should exist"
-        assert len(new_entities) > 0, "NewEntity entities should exist"
+        assert alice is not None, "Alice entity should exist"
+        assert len(high_mention) > 0, "High-mention entities should exist"
 
-        # Verify entities are created and have mention counts
-        # Note: LLM may merge mentions, so we just check that new entities exist
-        print(f"OriginalEntity mentions: {original['mention_count']}")
-        for new_entity in new_entities:
-            print(f"{new_entity['canonical_name']} mentions: {new_entity['mention_count']}")
-
-        print("PASS: Entities are created with mention counts tracked")
+        # Entities with 10 mentions each should rank higher than Alice (6 mentions)
+        for entity in high_mention:
+            assert entity['mention_count'] > alice['mention_count'], (
+                f"{entity['canonical_name']} ({entity['mention_count']} mentions) "
+                f"should rank higher than Alice ({alice['mention_count']} mentions)"
+            )
 
     finally:
         # Cleanup
@@ -361,10 +357,12 @@ async def test_entity_mention_ranking(memory, request_context):
 
 
 @pytest.mark.asyncio
-async def test_user_entity_extraction(memory, request_context):
+@pytest.mark.hs_llm_mat
+async def test_user_entity_extraction(memory_real_llm, request_context):
     """
     Test that the 'user' entity is correctly extracted when mentioned frequently.
     """
+    memory = memory_real_llm
     bank_id = f"test_user_entity_{datetime.now(timezone.utc).timestamp()}"
 
     try:

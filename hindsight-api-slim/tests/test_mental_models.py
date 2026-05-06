@@ -378,8 +378,10 @@ class TestReflect:
 class TestDirectivesInReflect:
     """Test that directives are followed during reflect operations."""
 
-    async def test_reflect_follows_language_directive(self, memory: MemoryEngine, request_context):
+    @pytest.mark.hs_llm_mat
+    async def test_reflect_follows_language_directive(self, memory_real_llm: MemoryEngine, request_context):
         """Test that reflect follows a directive to respond in a specific language."""
+        memory = memory_real_llm
         bank_id = f"test-directive-reflect-{uuid.uuid4().hex[:8]}"
 
         # Ensure bank exists
@@ -1214,7 +1216,13 @@ class TestMentalModelStaleness:
         await memory.delete_bank(bank_id, request_context=request_context)
 
 
+@pytest.mark.hs_llm_mat
 class TestMentalModelRefreshTagSecurity:
+
+    @pytest.fixture
+    def memory(self, memory_real_llm):
+        """Override to use real LLM for this class."""
+        return memory_real_llm
     """Test that mental model refresh respects tag-based security boundaries."""
 
     async def test_refresh_with_tags_only_accesses_same_tagged_models(self, memory: MemoryEngine, request_context):
@@ -1484,10 +1492,18 @@ class TestMentalModelRefreshTagSecurity:
         await memory.delete_bank(bank_id, request_context=request_context)
 
 
+@pytest.mark.hs_llm_mat
 class TestMentalModelTriggerTagsConfig:
     """Test trigger-level tags_match and tag_groups configuration for mental model refresh."""
 
-    async def test_trigger_tags_match_any_includes_untagged_content(self, memory: MemoryEngine, request_context):
+    @pytest.fixture
+    def memory(self, memory_real_llm):
+        """Override to use real LLM for this class."""
+        return memory_real_llm
+
+    async def test_trigger_tags_match_any_includes_untagged_content(
+        self, memory: MemoryEngine, request_context
+    ):
         """Test that setting trigger.tags_match='any' allows a tagged model to see untagged memories.
 
         This is the fix for #786: by default, tagged models use all_strict which excludes

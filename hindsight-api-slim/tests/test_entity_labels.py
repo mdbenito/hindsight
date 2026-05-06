@@ -925,11 +925,13 @@ def test_extraction_schema_no_labels_when_unconfigured():
 
 
 @pytest.mark.asyncio
-async def test_retain_extracts_single_value_label(memory, request_context):
+@pytest.mark.hs_llm_mat
+async def test_retain_extracts_single_value_label(memory_real_llm, request_context):
     """
     End-to-end: retain content with entity_labels configured (single-value).
     Verify that the LLM assigns the label and it ends up as a key:value entity on the memory unit.
     """
+    memory = memory_real_llm
     from hindsight_api.engine.memory_engine import fq_table
 
     bank_id = f"test-labels-single-{uuid.uuid4().hex[:8]}"
@@ -992,11 +994,13 @@ async def test_retain_extracts_single_value_label(memory, request_context):
 
 
 @pytest.mark.asyncio
-async def test_retain_extracts_multi_value_label(memory, request_context):
+@pytest.mark.hs_llm_mat
+async def test_retain_extracts_multi_value_label(memory_real_llm, request_context):
     """
     End-to-end: retain content with a multi_value entity_labels group.
     Verify that multiple label values can be assigned to a single fact.
     """
+    memory = memory_real_llm
     from hindsight_api.engine.memory_engine import fq_table
 
     bank_id = f"test-labels-multi-{uuid.uuid4().hex[:8]}"
@@ -1058,12 +1062,14 @@ async def test_retain_extracts_multi_value_label(memory, request_context):
 
 
 @pytest.mark.asyncio
-async def test_retain_extracts_free_values_label(memory, request_context):
+@pytest.mark.hs_llm_mat
+async def test_retain_extracts_free_values_label(memory_real_llm, request_context):
     """
     End-to-end: retain content with a free_values entity_labels group.
     Verify that the LLM produces a key:value entity with an open-ended value
     (not constrained to a predefined enum list).
     """
+    memory = memory_real_llm
     from hindsight_api.engine.memory_engine import fq_table
 
     bank_id = f"test-labels-free-{uuid.uuid4().hex[:8]}"
