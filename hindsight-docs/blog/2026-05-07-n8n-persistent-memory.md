@@ -1,5 +1,5 @@
 ---
-title: "n8n Workflows Are Stateless. Hindsight Makes Them Compound."
+title: "The Memory Layer Every n8n Workflow Was Missing"
 description: "Hindsight's new community node adds persistent memory to any n8n workflow — Retain, Recall, Reflect. Workflows compound across runs instead of resetting."
 authors: [benfrank241]
 date: 2026-05-07
@@ -7,7 +7,7 @@ tags: [hindsight, n8n, integration, memory, agents, workflows, no-code]
 image: /img/blog/n8n-persistent-memory.png
 ---
 
-![n8n Workflows Are Stateless. Hindsight Makes Them Compound.](/img/blog/n8n-persistent-memory.png)
+![The Memory Layer Every n8n Workflow Was Missing](/img/blog/n8n-persistent-memory.png)
 
 [n8n](https://n8n.io) is the connective tissue of modern automation. [Slack](https://api.slack.com), Gmail, Stripe, Notion, Sheets, [Zendesk](https://developer.zendesk.com), [Gong](https://gong.io), [OpenAI](https://platform.openai.com), Anthropic — 500+ integrations strung together by an open-source workflow engine you can self-host or run on n8n Cloud. If a thing has an API, the platform can probably wire it into a workflow.
 
