@@ -4,9 +4,8 @@ import { useState, FormEvent, useEffect } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import Image from "next/image";
 
 export default function LoginPage() {
   const [key, setKey] = useState("");
@@ -55,14 +54,19 @@ export default function LoginPage() {
     <div className="min-h-screen bg-background flex items-center justify-center p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
-          <div className="text-4xl mb-2">🧠</div>
-          <CardTitle>Hindsight</CardTitle>
+          <Image
+            src="/logo.png"
+            alt="Hindsight"
+            width={160}
+            height={160}
+            className="mx-auto"
+            unoptimized
+          />
           <CardDescription>Enter your access key to continue</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="access-key">Access Key</Label>
+            <div>
               <Input
                 id="access-key"
                 type="password"
@@ -73,11 +77,7 @@ export default function LoginPage() {
               />
             </div>
 
-            {error && (
-              <Alert variant="destructive">
-                <AlertDescription>{error}</AlertDescription>
-              </Alert>
-            )}
+            {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
 
             <Button type="submit" className="w-full" disabled={loading || !key}>
               {loading ? "Signing in..." : "Sign In"}
