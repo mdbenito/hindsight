@@ -1053,7 +1053,8 @@ def ensure_text_search_extension(
                 logger.info(f"Creating tsvector column on {table_name}")
                 # Plain tsvector column. The application populates search_vector
                 # at INSERT time via to_tsvector($lang, ...) using the configured
-                # HINDSIGHT_API_BM25_LANGUAGE — see ops_postgresql.insert_facts_batch.
+                # HINDSIGHT_API_TEXT_SEARCH_EXTENSION_NATIVE_LANGUAGE — see
+                # ops_postgresql.insert_facts_batch.
                 conn.execute(text(f"ALTER TABLE {schema_name}.{table_name} ADD COLUMN search_vector tsvector"))
 
                 # Create GIN index

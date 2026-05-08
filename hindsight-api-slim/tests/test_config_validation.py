@@ -211,48 +211,48 @@ def test_log_config_masks_read_database_url(monkeypatch, caplog):
 # ---------------------------------------------------------------------------
 
 
-def test_bm25_language_defaults_to_english(monkeypatch):
+def test_native_language_defaults_to_english(monkeypatch):
     from hindsight_api.config import HindsightConfig
 
-    monkeypatch.delenv("HINDSIGHT_API_BM25_LANGUAGE", raising=False)
+    monkeypatch.delenv("HINDSIGHT_API_TEXT_SEARCH_EXTENSION_NATIVE_LANGUAGE", raising=False)
     monkeypatch.setenv("HINDSIGHT_API_LLM_PROVIDER", "mock")
 
     config = HindsightConfig.from_env()
-    assert config.bm25_language == "english"
+    assert config.text_search_extension_native_language == "english"
 
 
-def test_bm25_language_loaded_from_env(monkeypatch):
+def test_native_language_loaded_from_env(monkeypatch):
     from hindsight_api.config import HindsightConfig
 
-    monkeypatch.setenv("HINDSIGHT_API_BM25_LANGUAGE", "french")
+    monkeypatch.setenv("HINDSIGHT_API_TEXT_SEARCH_EXTENSION_NATIVE_LANGUAGE", "french")
     monkeypatch.setenv("HINDSIGHT_API_LLM_PROVIDER", "mock")
 
     config = HindsightConfig.from_env()
-    assert config.bm25_language == "french"
+    assert config.text_search_extension_native_language == "french"
 
 
-def test_bm25_language_lowercased(monkeypatch):
+def test_native_language_lowercased(monkeypatch):
     from hindsight_api.config import HindsightConfig
 
-    monkeypatch.setenv("HINDSIGHT_API_BM25_LANGUAGE", "Spanish")
+    monkeypatch.setenv("HINDSIGHT_API_TEXT_SEARCH_EXTENSION_NATIVE_LANGUAGE", "Spanish")
     monkeypatch.setenv("HINDSIGHT_API_LLM_PROVIDER", "mock")
 
     config = HindsightConfig.from_env()
-    assert config.bm25_language == "spanish"
+    assert config.text_search_extension_native_language == "spanish"
 
 
 @pytest.mark.parametrize(
     "bad_value",
     ["en glish", "english;DROP TABLE", "english'", "1english", "english-extra", ""],
 )
-def test_bm25_language_rejects_invalid_identifiers(monkeypatch, bad_value):
-    """bm25_language is embedded into raw SQL — non-identifiers must be rejected."""
+def test_native_language_rejects_invalid_identifiers(monkeypatch, bad_value):
+    """text_search_extension_native_language is embedded into raw SQL — non-identifiers must be rejected."""
     from hindsight_api.config import HindsightConfig
 
-    monkeypatch.setenv("HINDSIGHT_API_BM25_LANGUAGE", bad_value)
+    monkeypatch.setenv("HINDSIGHT_API_TEXT_SEARCH_EXTENSION_NATIVE_LANGUAGE", bad_value)
     monkeypatch.setenv("HINDSIGHT_API_LLM_PROVIDER", "mock")
 
-    with pytest.raises(ValueError, match="Invalid bm25_language"):
+    with pytest.raises(ValueError, match="Invalid text_search_extension_native_language"):
         HindsightConfig.from_env()
 
 

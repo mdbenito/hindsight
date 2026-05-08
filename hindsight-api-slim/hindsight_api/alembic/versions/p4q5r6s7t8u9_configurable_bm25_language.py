@@ -2,8 +2,9 @@
 
 The search_vector tsvector column was originally GENERATED ALWAYS with a
 hardcoded ``to_tsvector('english', ...)`` expression. To support configurable
-``HINDSIGHT_API_BM25_LANGUAGE``, we convert it to a regular tsvector column
-that the application populates at INSERT time via ``to_tsvector($lang, ...)``.
+``HINDSIGHT_API_TEXT_SEARCH_EXTENSION_NATIVE_LANGUAGE``, we convert it to a
+regular tsvector column that the application populates at INSERT time via
+``to_tsvector($lang, ...)``.
 
 Existing rows retain their English-derived lexemes — switching the configured
 language only affects newly-written rows. Users who need to backfill existing
@@ -13,7 +14,7 @@ Only the ``native`` text-search backend is affected. ``vchord``, ``pg_textsearch
 and ``pgroonga`` use other column types or no column at all.
 
 Revision ID: p4q5r6s7t8u9
-Revises: m3rg3h3ad5f6
+Revises: 86f7a033d372
 Create Date: 2026-05-08
 """
 
@@ -26,7 +27,7 @@ from sqlalchemy import Connection, text
 from hindsight_api.alembic._dialect import run_for_dialect
 
 revision: str = "p4q5r6s7t8u9"
-down_revision: str | Sequence[str] | None = "m3rg3h3ad5f6"
+down_revision: str | Sequence[str] | None = "86f7a033d372"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

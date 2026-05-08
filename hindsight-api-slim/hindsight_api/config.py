@@ -291,7 +291,7 @@ ENV_RERANKER_GOOGLE_SERVICE_ACCOUNT_KEY = "HINDSIGHT_API_RERANKER_GOOGLE_SERVICE
 
 ENV_VECTOR_EXTENSION = "HINDSIGHT_API_VECTOR_EXTENSION"
 ENV_TEXT_SEARCH_EXTENSION = "HINDSIGHT_API_TEXT_SEARCH_EXTENSION"
-ENV_BM25_LANGUAGE = "HINDSIGHT_API_BM25_LANGUAGE"
+ENV_TEXT_SEARCH_EXTENSION_NATIVE_LANGUAGE = "HINDSIGHT_API_TEXT_SEARCH_EXTENSION_NATIVE_LANGUAGE"
 ENV_RETAIN_OUTPUT_LANGUAGE = "HINDSIGHT_API_RETAIN_OUTPUT_LANGUAGE"
 
 ENV_HOST = "HINDSIGHT_API_HOST"
@@ -572,7 +572,7 @@ DEFAULT_TEXT_SEARCH_EXTENSION = "native"  # Options: "native", "vchord", "pg_tex
 # affects text_search_extension == "native"; other backends use their own
 # tokenizers (vchord: llmlingua2, pg_textsearch: hardcoded english,
 # pgroonga: TokenBigram polyglot).
-DEFAULT_BM25_LANGUAGE = "english"
+DEFAULT_TEXT_SEARCH_EXTENSION_NATIVE_LANGUAGE = "english"
 
 # LiteLLM defaults
 DEFAULT_LITELLM_API_BASE = "http://localhost:4000"
@@ -900,7 +900,10 @@ class HindsightConfig:
     database_schema: str
     vector_extension: str  # "pgvector", "vchord", "pgvectorscale", or "scann"
     text_search_extension: str  # "native", "vchord", "pg_textsearch", or "pgroonga"
-    bm25_language: str  # PostgreSQL text search dictionary for the native BM25 backend
+    # PostgreSQL text search dictionary for the "native" backend (ignored by
+    # other backends). Only the "native" backend reads this field; pgroonga
+    # uses TokenBigram, vchord uses llmlingua2, pg_textsearch hardcodes english.
+    text_search_extension_native_language: str
     retain_output_language: str | None  # When set, instructs the fact extractor to output in this language
 
     # LLM (default, used as fallback for per-operation config)
@@ -1372,15 +1375,16 @@ class HindsightConfig:
                 f"Invalid text_search_extension: {self.text_search_extension}. Must be one of: {', '.join(valid_text_search)}"
             )
 
-        # Validate bm25_language as a PG identifier. Embedded directly into raw
-        # SQL via to_tsvector('<lang>', ...), so we reject anything that isn't a
-        # plain identifier to prevent injection. Intentionally permissive about
-        # which dictionaries exist — users may install custom ones like zhparser;
-        # we only check shape here. PG raises a clear error at query time if the
-        # dictionary is missing.
-        if not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", self.bm25_language):
+        # Validate text_search_extension_native_language as a PG identifier.
+        # Embedded directly into raw SQL via to_tsvector('<lang>', ...), so we
+        # reject anything that isn't a plain identifier to prevent injection.
+        # Intentionally permissive about which dictionaries exist — users may
+        # install custom ones like zhparser; we only check shape here. PG
+        # raises a clear error at query time if the dictionary is missing.
+        if not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", self.text_search_extension_native_language):
             raise ValueError(
-                f"Invalid bm25_language: {self.bm25_language!r}. Must be a valid PostgreSQL identifier "
+                f"Invalid text_search_extension_native_language: "
+                f"{self.text_search_extension_native_language!r}. Must be a valid PostgreSQL identifier "
                 f"(letters, digits, underscores; not starting with a digit). Examples: 'english', "
                 f"'french', 'simple', 'zhparser'."
             )
@@ -1461,7 +1465,10 @@ class HindsightConfig:
             database_schema=os.getenv(ENV_DATABASE_SCHEMA, DEFAULT_DATABASE_SCHEMA),
             vector_extension=os.getenv(ENV_VECTOR_EXTENSION, DEFAULT_VECTOR_EXTENSION).lower(),
             text_search_extension=os.getenv(ENV_TEXT_SEARCH_EXTENSION, DEFAULT_TEXT_SEARCH_EXTENSION).lower(),
-            bm25_language=os.getenv(ENV_BM25_LANGUAGE, DEFAULT_BM25_LANGUAGE).lower(),
+            text_search_extension_native_language=os.getenv(
+                ENV_TEXT_SEARCH_EXTENSION_NATIVE_LANGUAGE,
+                DEFAULT_TEXT_SEARCH_EXTENSION_NATIVE_LANGUAGE,
+            ).lower(),
             retain_output_language=(os.getenv(ENV_RETAIN_OUTPUT_LANGUAGE) or None),
             # LLM
             llm_provider=llm_provider,

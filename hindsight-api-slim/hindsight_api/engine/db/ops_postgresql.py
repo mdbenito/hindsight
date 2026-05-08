@@ -106,10 +106,11 @@ class PostgreSQLOps(DataAccessOps):
             """
         elif config.text_search_extension == "native":
             # search_vector is a regular tsvector column populated here using the
-            # configured bm25_language. It used to be GENERATED ALWAYS with a
-            # hardcoded 'english', which prevented per-deployment language
-            # configuration. bm25_language is validated in HindsightConfig.validate()
-            # as a PG identifier, so embedding it as a SQL literal is safe.
+            # configured native dictionary. It used to be GENERATED ALWAYS with
+            # a hardcoded 'english', which prevented per-deployment language
+            # configuration. text_search_extension_native_language is validated
+            # in HindsightConfig.validate() as a PG identifier, so embedding it
+            # as a SQL literal is safe.
             query = f"""
                 WITH input_data AS (
                     SELECT * FROM unnest(
@@ -133,7 +134,7 @@ class PostgreSQLOps(DataAccessOps):
                     observation_scopes_json,
                     text_signals,
                     to_tsvector(
-                        '{config.bm25_language}'::regconfig,
+                        '{config.text_search_extension_native_language}'::regconfig,
                         COALESCE(text, '') || ' ' || COALESCE(context, '') || ' ' || COALESCE(text_signals, '')
                     )
                 FROM input_data

@@ -951,10 +951,11 @@ def _build_extraction_prompt_and_schema(config) -> tuple[str, type]:
         prompt = prompt + labels_section
 
     # Force the LLM to emit fact text in the configured language, regardless of
-    # the source content's language. This is independent of bm25_language by
-    # design — users may want extraction in one language while indexing in
-    # another (e.g. preserve original-language facts but index with a 'simple'
-    # tokenizer). When unset, the extractor preserves the source language.
+    # the source content's language. This is independent of the BM25 indexing
+    # language (HINDSIGHT_API_TEXT_SEARCH_EXTENSION_NATIVE_LANGUAGE) by design —
+    # users may want extraction in one language while indexing in another (e.g.
+    # preserve original-language facts but index with a 'simple' tokenizer).
+    # When unset, the extractor preserves the source language.
     retain_output_language = getattr(config, "retain_output_language", None)
     if retain_output_language:
         prompt = (

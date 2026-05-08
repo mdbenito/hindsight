@@ -91,4 +91,4 @@ def test_configurable_bm25_language_migration_chains_off_head():
 
     src = target.read_text()
     assert 'revision: str = "p4q5r6s7t8u9"' in src
-    assert 'down_revision: str | Sequence[str] | None = "m3rg3h3ad5f6"' in src
+    assert 'down_revision: str | Sequence[str] | None = "86f7a033d372"' in src
