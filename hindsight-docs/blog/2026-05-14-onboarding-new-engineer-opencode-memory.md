@@ -13,7 +13,7 @@ If Maya is unavailable for a week, Devon is going to spend that week mostly stuc
 
 <!-- truncate -->
 
-Except, since late January, Maya has been using [OpenCode](https://opencode.ai) with [the Hindsight plugin](/blog/2026/04/20/opencode-persistent-memory). Every session has been writing to a shared Hindsight namespace. Devon points his own OpenCode at that namespace on day one.
+Except, since late January, Maya has been using [OpenCode](https://opencode.ai) with [the Hindsight plugin](/blog/2026/04/20/opencode-persistent-memory). Every session has been writing to a shared Hindsight memory bank. Devon points his own OpenCode at that same bank on day one.
 
 The rest of the week looks different.
 
@@ -21,9 +21,9 @@ The rest of the week looks different.
 
 ## The Setup
 
-Maya joined in January. The orders-service rewrite has been her main work since week two. Late that month, the team installed `@vectorize-io/opencode-hindsight` and pointed every member's OpenCode at a shared memory namespace called `team-orders`. Five engineers have used it on and off. Maya has been the most consistent contributor.
+Maya joined in January. The orders-service rewrite has been her main work since week two. Late that month, the team installed `@vectorize-io/opencode-hindsight` and pointed every member's OpenCode at a shared memory bank with the bank ID `team-orders`. Five engineers have used it on and off. Maya has been the most consistent contributor.
 
-The plugin captures conversations after idle, runs reflect periodically, and injects relevant memories into each session's system prompt. (The [integration tutorial](/blog/2026/04/20/opencode-persistent-memory) covers how this actually works.) For the past five months, every decision discussed in an OpenCode session, every dead end, every "we tried X and it broke because Y," has been written to that namespace.
+The plugin captures conversations after idle, runs reflect periodically, and injects relevant memories into each session's system prompt. (The [integration tutorial](/blog/2026/04/20/opencode-persistent-memory) covers how this actually works.) For the past five months, every decision discussed in an OpenCode session, every dead end, every "we tried X and it broke because Y," has been written to that bank.
 
 Devon's onboarding contract is the same as anyone's: ship a small change to the orders service in his first week. The difference is that his OpenCode session already knows things he doesn't.
 
@@ -79,9 +79,11 @@ Of all the moments this week, this is the smallest, and the one that compounds t
 
 ## Can Multiple Engineers Share an AI Coding Agent's Memory?
 
-Yes, when the agent is configured with a memory layer that supports namespacing. Hindsight stores memories under a namespace identifier. Pointing every engineer's OpenCode session at the same namespace means every session reads from and writes to the same store. Reflect runs against the combined memory, so synthesized observations cover the whole team's work, not one engineer's slice. Contradiction handling reconciles disagreements between authors as they happen.
+Yes, when the agent is configured with a memory layer that supports shared memory banks. Hindsight organizes memories into memory banks, each addressed by a bank ID. Pointing every engineer's OpenCode session at the same bank ID means every session reads from and writes to the same store. Reflect runs against the combined memory, so synthesized observations cover the whole team's work, not one engineer's slice. Contradiction handling reconciles disagreements between authors as they happen.
 
-In practice this is one configuration value in the OpenCode plugin. Same namespace, same memory.
+In practice this is one configuration value in the OpenCode plugin. Same bank ID, same memory.
+
+The easiest way to stand up a shared memory bank is [Hindsight Cloud](https://ui.hindsight.vectorize.io/signup). Sign up, generate an API token, and have every team member set `HINDSIGHT_API_URL`, `HINDSIGHT_API_TOKEN`, and `HINDSIGHT_BANK_ID` to the same values. No infrastructure to run; the bank is shared from the first session.
 
 ---
 
@@ -106,7 +108,7 @@ The same five days, with everything serialized through Maya. The README orients 
 
 Maya spends about six hours that week answering Devon's questions. Devon asks them well, but they're the same six hours she'd spend onboarding the next engineer in three months, and the next one after that.
 
-The Hindsight namespace doesn't remove Maya from Devon's onboarding. It removes her from the questions that have already been answered.
+The shared memory bank doesn't remove Maya from Devon's onboarding. It removes her from the questions that have already been answered.
 
 ---
 
