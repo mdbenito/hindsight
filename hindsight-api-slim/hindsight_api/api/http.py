@@ -171,6 +171,12 @@ class RecallRequest(BaseModel):
         description="Compound tag filter using boolean groups. Groups in the list are AND-ed. "
         "Each group is a leaf {tags, match} or compound {and: [...]}, {or: [...]}, {not: ...}.",
     )
+    retrieval_weights: dict[str, float] | None = Field(
+        default=None,
+        description="Per-strategy weights for Reciprocal Rank Fusion. Keys: 'semantic', 'bm25', "
+        "'graph', 'temporal'. Values are multipliers (1.0 = default, 2.0 = double influence, "
+        "0.0 = disabled). Omitted keys default to the bank/server configuration.",
+    )
 
     @field_validator("query")
     @classmethod
@@ -3215,6 +3221,7 @@ def _register_routes(app: FastAPI):
                     tags=request.tags,
                     tags_match=request.tags_match,
                     tag_groups=request.tag_groups,
+                    retrieval_weights=request.retrieval_weights,
                 )
 
             # Convert core MemoryFact objects to API RecallResult objects (excluding internal metrics)

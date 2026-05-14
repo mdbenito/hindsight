@@ -445,6 +445,10 @@ ENV_RECALL_BUDGET_ADAPTIVE_MID = "HINDSIGHT_API_RECALL_BUDGET_ADAPTIVE_MID"
 ENV_RECALL_BUDGET_ADAPTIVE_HIGH = "HINDSIGHT_API_RECALL_BUDGET_ADAPTIVE_HIGH"
 ENV_RECALL_BUDGET_MIN = "HINDSIGHT_API_RECALL_BUDGET_MIN"
 ENV_RECALL_BUDGET_MAX = "HINDSIGHT_API_RECALL_BUDGET_MAX"
+ENV_RECALL_WEIGHT_SEMANTIC = "HINDSIGHT_API_RECALL_WEIGHT_SEMANTIC"
+ENV_RECALL_WEIGHT_BM25 = "HINDSIGHT_API_RECALL_WEIGHT_BM25"
+ENV_RECALL_WEIGHT_GRAPH = "HINDSIGHT_API_RECALL_WEIGHT_GRAPH"
+ENV_RECALL_WEIGHT_TEMPORAL = "HINDSIGHT_API_RECALL_WEIGHT_TEMPORAL"
 
 # Audit log settings
 ENV_AUDIT_LOG_ENABLED = "HINDSIGHT_API_AUDIT_LOG_ENABLED"
@@ -676,6 +680,14 @@ DEFAULT_RECALL_BUDGET_ADAPTIVE_MID = 0.075
 DEFAULT_RECALL_BUDGET_ADAPTIVE_HIGH = 0.25
 DEFAULT_RECALL_BUDGET_MIN = 20  # Floor for the adaptive function
 DEFAULT_RECALL_BUDGET_MAX = 2000  # Ceiling for the adaptive function
+
+# Recall retrieval weights (RRF fusion)
+# Per-strategy multipliers for Reciprocal Rank Fusion.
+# 1.0 = default (equal weight), 2.0 = double influence, 0.0 = disabled.
+DEFAULT_RECALL_WEIGHT_SEMANTIC = 1.0
+DEFAULT_RECALL_WEIGHT_BM25 = 1.0
+DEFAULT_RECALL_WEIGHT_GRAPH = 1.0
+DEFAULT_RECALL_WEIGHT_TEMPORAL = 1.0
 
 # Disposition defaults (None = not set, fall back to bank DB value or 3)
 DEFAULT_DISPOSITION_SKEPTICISM = None
@@ -1122,6 +1134,12 @@ class HindsightConfig:
     recall_budget_min: int
     recall_budget_max: int
 
+    # Recall retrieval weights (hierarchical - can be overridden per bank or per request)
+    recall_weight_semantic: float
+    recall_weight_bm25: float
+    recall_weight_graph: float
+    recall_weight_temporal: float
+
     # Disposition settings (hierarchical - can be overridden per bank; None = fall back to DB)
     disposition_skepticism: int | None
     disposition_literalism: int | None
@@ -1261,6 +1279,11 @@ class HindsightConfig:
         "recall_budget_adaptive_high",
         "recall_budget_min",
         "recall_budget_max",
+        # Recall retrieval weights
+        "recall_weight_semantic",
+        "recall_weight_bm25",
+        "recall_weight_graph",
+        "recall_weight_temporal",
         # Disposition settings
         "disposition_skepticism",
         "disposition_literalism",
@@ -1841,6 +1864,11 @@ class HindsightConfig:
             ),
             recall_budget_min=int(os.getenv(ENV_RECALL_BUDGET_MIN, str(DEFAULT_RECALL_BUDGET_MIN))),
             recall_budget_max=int(os.getenv(ENV_RECALL_BUDGET_MAX, str(DEFAULT_RECALL_BUDGET_MAX))),
+            # Recall retrieval weights
+            recall_weight_semantic=float(os.getenv(ENV_RECALL_WEIGHT_SEMANTIC, str(DEFAULT_RECALL_WEIGHT_SEMANTIC))),
+            recall_weight_bm25=float(os.getenv(ENV_RECALL_WEIGHT_BM25, str(DEFAULT_RECALL_WEIGHT_BM25))),
+            recall_weight_graph=float(os.getenv(ENV_RECALL_WEIGHT_GRAPH, str(DEFAULT_RECALL_WEIGHT_GRAPH))),
+            recall_weight_temporal=float(os.getenv(ENV_RECALL_WEIGHT_TEMPORAL, str(DEFAULT_RECALL_WEIGHT_TEMPORAL))),
             # Disposition settings (None = fall back to DB value)
             disposition_skepticism=int(os.getenv(ENV_DISPOSITION_SKEPTICISM))
             if os.getenv(ENV_DISPOSITION_SKEPTICISM)

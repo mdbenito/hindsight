@@ -2655,6 +2655,7 @@ class MemoryEngine(MemoryEngineInterface):
         tag_groups: list[TagGroup] | None = None,
         created_after: datetime | None = None,
         created_before: datetime | None = None,
+        retrieval_weights: dict[str, float] | None = None,
         _connection_budget: int | None = None,
         _quiet: bool = False,
     ) -> RecallResultModel:
@@ -3254,6 +3255,19 @@ class MemoryEngine(MemoryEngineInterface):
             step_start = time.time()
             from .search.fusion import reciprocal_rank_fusion
 
+            # Build effective retrieval weights: config defaults + per-request overrides
+            effective_weights: dict[str, float] = {
+                "semantic": float(budget_config_dict.get("recall_weight_semantic", 1.0)),
+                "bm25": float(budget_config_dict.get("recall_weight_bm25", 1.0)),
+                "graph": float(budget_config_dict.get("recall_weight_graph", 1.0)),
+                "temporal": float(budget_config_dict.get("recall_weight_temporal", 1.0)),
+            }
+            if retrieval_weights:
+                effective_weights.update(retrieval_weights)
+
+            # Only pass weights to RRF if any differ from default (1.0)
+            rrf_weights = effective_weights if any(w != 1.0 for w in effective_weights.values()) else None
+
             fusion_span = tracer_otel.start_span("hindsight.recall_fusion")
             fusion_span.set_attribute("hindsight.bank_id", bank_id)
             fusion_span.set_attribute("hindsight.semantic_count", len(semantic_results))
@@ -3265,10 +3279,14 @@ class MemoryEngine(MemoryEngineInterface):
                 # Merge 3 or 4 result lists depending on temporal constraint
                 if temporal_results:
                     merged_candidates = reciprocal_rank_fusion(
-                        [semantic_results, bm25_results, graph_results, temporal_results]
+                        [semantic_results, bm25_results, graph_results, temporal_results],
+                        weights=rrf_weights,
                     )
                 else:
-                    merged_candidates = reciprocal_rank_fusion([semantic_results, bm25_results, graph_results])
+                    merged_candidates = reciprocal_rank_fusion(
+                        [semantic_results, bm25_results, graph_results],
+                        weights=rrf_weights,
+                    )
 
                 step_duration = time.time() - step_start
                 log_buffer.append(

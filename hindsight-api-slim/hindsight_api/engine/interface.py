@@ -82,6 +82,7 @@ class MemoryEngineInterface(ABC):
         include_chunks: bool = False,
         max_chunk_tokens: int = 8192,
         request_context: "RequestContext",
+        retrieval_weights: dict[str, float] | None = None,
     ) -> "RecallResult":
         """
         Recall memories relevant to a query.

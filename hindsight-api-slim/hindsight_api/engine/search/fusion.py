@@ -7,15 +7,25 @@ from typing import Any
 from .types import MergedCandidate, RetrievalResult
 
 
-def reciprocal_rank_fusion(result_lists: list[list[RetrievalResult]], k: int = 60) -> list[MergedCandidate]:
+def reciprocal_rank_fusion(
+    result_lists: list[list[RetrievalResult]],
+    k: int = 60,
+    weights: dict[str, float] | None = None,
+) -> list[MergedCandidate]:
     """
     Merge multiple ranked result lists using Reciprocal Rank Fusion.
 
-    RRF formula: score(d) = sum_over_lists(1 / (k + rank(d)))
+    RRF formula: score(d) = sum_over_lists(w_i / (k + rank(d)))
+
+    When weights are provided, each retrieval strategy's contribution is
+    multiplied by its weight. A weight of 2.0 doubles that strategy's
+    influence; 0.0 disables it entirely. Default weight is 1.0 (unweighted).
 
     Args:
         result_lists: List of result lists, each containing RetrievalResult objects
         k: Constant for RRF formula (default: 60)
+        weights: Optional mapping of strategy name to weight, e.g.
+                 {"semantic": 1.0, "bm25": 1.0, "graph": 2.0, "temporal": 1.0}
 
     Returns:
         Merged list of MergedCandidate objects, sorted by RRF score
@@ -25,8 +35,14 @@ def reciprocal_rank_fusion(result_lists: list[list[RetrievalResult]], k: int = 6
         bm25_results = [RetrievalResult(...), RetrievalResult(...), ...]
         graph_results = [RetrievalResult(...), RetrievalResult(...), ...]
 
+        # Unweighted (default)
         merged = reciprocal_rank_fusion([semantic_results, bm25_results, graph_results])
-        # Returns: [MergedCandidate(...), MergedCandidate(...), ...]
+
+        # With graph retrieval weighted 2x
+        merged = reciprocal_rank_fusion(
+            [semantic_results, bm25_results, graph_results],
+            weights={"graph": 2.0},
+        )
     """
     # Track scores from each list
     rrf_scores = {}
@@ -37,6 +53,7 @@ def reciprocal_rank_fusion(result_lists: list[list[RetrievalResult]], k: int = 6
 
     for source_idx, results in enumerate(result_lists):
         source_name = source_names[source_idx] if source_idx < len(source_names) else f"source_{source_idx}"
+        weight = (weights or {}).get(source_name, 1.0)
 
         for rank, retrieval in enumerate(results, start=1):
             # Type check to catch tuple issues
@@ -56,12 +73,12 @@ def reciprocal_rank_fusion(result_lists: list[list[RetrievalResult]], k: int = 6
             if doc_id not in all_retrievals:
                 all_retrievals[doc_id] = retrieval
 
-            # Calculate RRF score contribution
+            # Calculate weighted RRF score contribution
             if doc_id not in rrf_scores:
                 rrf_scores[doc_id] = 0.0
                 source_ranks[doc_id] = {}
 
-            rrf_scores[doc_id] += 1.0 / (k + rank)
+            rrf_scores[doc_id] += weight / (k + rank)
             source_ranks[doc_id][f"{source_name}_rank"] = rank
 
     # Combine into final results with metadata
