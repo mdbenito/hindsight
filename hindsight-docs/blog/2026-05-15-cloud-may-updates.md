@@ -4,7 +4,7 @@ authors: [benfrank241]
 date: 2026-05-15T12:00
 tags: [hindsight-cloud, release, i18n, internationalization, billing, ui]
 description: "Catching up on six weeks of Hindsight Cloud: a multilingual control plane, Alipay at checkout, a new Constellation graph view, and a refreshed Memories, Mental Models, and Operations experience."
-image: /img/blog/hindsight-cloud-goes-global.png
+image: /img/blog/cloud-may-updates.png
 hide_table_of_contents: true
 ---
 
