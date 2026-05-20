@@ -22,15 +22,15 @@ This post lays out a four-lever framework for agent memory consolidation — imp
 
 ## Why Stale Memory Degrades Performance
 
-Three forces push every production agent memory system toward aggressive pruning.
+Three forces make consolidation the most important engineering decision in any long-running agent memory system.
 
 **Context economics.** At 128K-token windows and frontier-model pricing, stuffing the full conversation history into every prompt costs roughly an order of magnitude more per turn than retrieving a curated subset. The cost is real, but the bigger problem is attention dilution. Retrieved context that contains five contradictory facts about the same entity does not produce a coherent answer, even from a strong model.
 
-**Entity drift.** Users change. Codebases change. The customer who used Postgres in January migrated to MySQL in March. If both facts sit in memory with equal weight, the agent will pick whichever one the retriever scored higher this turn. The right behavior is for the older fact to lose confidence as the newer one supersedes it.
+**Entity drift.** Users change. Codebases change. The customer who used Postgres in January migrated to MySQL in March. If both facts sit in memory with equal weight, the agent will pick whichever one the retriever scored higher this turn. The right behavior is for the newer fact to supersede the older one — through merge, not deletion.
 
-**Index precision.** Retrieval quality degrades as the index grows. More documents mean more near-duplicates competing for the top-k slot, and more chances for a stale fact to outscore a current one. Pruning is not just storage hygiene — it is the only way to keep retrieval precision stable over time.
+**Index precision.** Retrieval quality degrades as the index grows. More documents mean more near-duplicates competing for the top-k slot, and more chances for a stale fact to outscore a current one. Good consolidation — recency-weighted scoring, merge, and importance filtering — is what keeps retrieval precision stable. Deletion is not required.
 
-A brief detour through cognitive science: human memory is not a passive archive — it actively discards. Ebbinghaus's retention research and the complementary learning systems hypothesis (McClelland et al., 1995) both model memory attrition as an active process, not a failure of storage. The hippocampus stores episodes, the neocortex consolidates patterns, and most episodic detail is discarded along the way. That structure is the analogue for what production agent memory consolidation needs.
+A brief detour through cognitive science — but to make the opposite point. Ebbinghaus's retention research and the complementary learning systems hypothesis (McClelland et al., 1995) describe memory attrition as a biological necessity, not a design goal. The hippocampus stores episodes; the neocortex consolidates patterns; most episodic detail is discarded along the way because synaptic capacity is finite. Agent memory systems are not constrained by synaptic capacity. The lesson from cognitive science is not that we should mimic biological forgetting — it is that consolidation is what makes memory useful. Pattern extraction, entity resolution, and recency-weighted retrieval are the parts worth replicating. The capacity constraints are not.
 
 ## The Four Levers of Memory Consolidation
 
@@ -91,17 +91,17 @@ The trade-off with decay is straightforward: it buys recency at the cost of stab
 
 ## Eviction: When Memories Leave
 
-Eviction is the last lever, and the most irreversible. Once a memory is gone, it is gone. Three legitimate reasons to evict:
+Eviction is the most irreversible lever, and for most agent memory workloads, the least necessary. Good consolidation — importance filtering, merge, and recency-weighted retrieval — makes stale facts effectively unretrievable without deleting them. There are three situations where eviction still appears:
 
-**Hard delete.** GDPR, user-requested deletion, security incident, PII redaction. These are non-negotiable and should bypass all other policy.
+**Hard delete.** GDPR, user-requested deletion, security incident, PII redaction. These are non-negotiable and should bypass all other policy. This is the only case where eviction is genuinely required.
 
-**Archival tiering.** Letta's pattern: core memory stays in context, archival memory lives in vector storage, and the agent itself decides what moves between tiers using tool calls. This is closer to eviction-as-policy than true deletion — facts are still retrievable, just not in the prompt.
+**Archival tiering.** Letta's pattern: core memory stays in context, archival memory lives in vector storage, and the agent itself decides what moves between tiers using tool calls. This is closer to tier management than true deletion — facts are still retrievable, just not in the prompt.
 
-**TTL or LRU eviction.** Time-based or least-recently-used policies that bound index size. Cheap to implement, lossy in practice.
+**TTL or LRU eviction.** Time-based or least-recently-used policies that bound index size. Cheap to implement, lossy in practice — and usually a sign that consolidation earlier in the pipeline is doing too little. Bounded index size is a storage cost optimization, not a quality improvement.
 
-The "summarize then drop" pattern that LangChain's `ConversationSummaryMemory` popularized is technically eviction, but it is lossy compaction rather than consolidation. Summaries lose entity-level detail that retrieval depends on. They are a reasonable fallback when nothing better exists, not a substitute for the four-lever pipeline.
+The "summarize then drop" pattern that LangChain's `ConversationSummaryMemory` popularized is technically eviction, but it is lossy compaction rather than consolidation. Summaries lose entity-level detail that retrieval depends on. They exist because the underlying memory system has no consolidation pipeline — and they paper over that absence rather than replacing it.
 
-The practical rule: evict last. Importance filtering, merge, and decay are all reversible — you can re-tune the policy and re-process old data. Hard eviction is one-way. Almost every consolidation decision should be made by another lever before it reaches eviction.
+The practical rule: eviction is a compliance tool, not a performance tool. For GDPR, user-requested deletion, and PII redaction, it is non-negotiable. For everything else — stale facts, noise accumulation, index growth — better consolidation earlier in the pipeline is the answer.
 
 ## How the Major Systems Handle the Four Levers
 
@@ -115,7 +115,7 @@ No agent memory system covers all four levers well. Here is the honest map:
 | **LangChain Memory** | Window or summary | None | None | Window eviction or summarize-and-drop |
 | **Hindsight** | Fact extraction filter | LLM-powered consolidation | Recency boost at retrieval | None native |
 
-Zep is the strongest decay system. Letta has the cleanest tier story. Mem0 has the most polished write-time operations API. LangChain's memory primitives are deprecated for a reason — they are compaction, not consolidation. Hindsight covers importance and merge well; it approximates decay through retrieval scoring rather than explicit confidence degradation. It does not do individual memory eviction — the design assumption is that LLM-powered consolidation and recency-weighted retrieval make stale facts effectively unretrievable, which holds for most workloads but not for compliance-driven deletion requirements.
+Zep is the strongest decay system. Letta has the cleanest tier story. Mem0 has the most polished write-time operations API. LangChain's memory primitives are deprecated for a reason — they are compaction, not consolidation. Hindsight deliberately skips individual memory eviction — the architecture is built on the premise that good consolidation makes it unnecessary. Stale facts become effectively unretrievable through LLM-powered consolidation and recency-weighted scoring; compliance-driven deletion is handled by bank-level clearing. The "None native" entry in the table above is a design choice, not a gap.
 
 ## Evaluating a Consolidation Policy
 
@@ -136,9 +136,9 @@ If you are designing or evaluating an agent memory system, this is the order to 
 1. **Start with fact-level storage, not turn-level.** Extracting facts at write time is the highest-leverage consolidation decision. Everything downstream gets easier.
 2. **Do entity resolution at write time.** Resolving at query time fragments the index and slows every retrieval. Pay the cost once on write.
 3. **Add decay only when you have temporal claims worth decaying.** If your agent does not track state changes, exponential decay just throws away stable facts.
-4. **Eviction last.** Almost everything else is reversible. Hard eviction is not.
+4. **Evict only for compliance.** GDPR, user-requested deletion, and PII redaction require hard eviction. For performance problems — stale facts, noisy indexes, rising token costs — better consolidation earlier in the pipeline is the answer.
 
-The first three of these defaults are roughly what Hindsight ships with out of the box; Hindsight does not implement hard eviction, trading that lever for simplicity. The checklist still applies to any agent memory system: when a vendor cannot answer how their system handles one of the four levers, you have found the failure mode you will hit in production.
+These defaults are what Hindsight ships with out of the box. The fourth is not really a consolidation default — it is a compliance boundary. When a vendor cannot answer how their system handles the first three levers, you have found the failure mode you will hit in production.
 
 ## The Four Levers as a Checklist
 
@@ -151,7 +151,7 @@ The next time you evaluate an agent memory system, ask four questions about its 
 
 If the answer to any of these is "the LLM decides at write time" or "we don't model that," you have found where your production agent will quietly drift. Retrieval scores are the easy part. The hard part is the policy layer that decides what should have survived to be retrieved in the first place.
 
-Hindsight is a strong implementation of the first three levers — importance, merge, and retrieval-based decay — without hard eviction. The architecture — fact extraction, LLM-powered consolidation, multi-strategy retrieval, cross-encoder reranking — is documented at [hindsight.vectorize.io](https://hindsight.vectorize.io), and the source is MIT-licensed on GitHub. Whether you build your own agent memory consolidation policy or pick something off the shelf, the four levers are the right shape of the problem.
+Hindsight's architecture — fact extraction, LLM-powered consolidation, multi-strategy retrieval, cross-encoder reranking — is built on the premise that good consolidation makes eviction unnecessary for performance. Agent memory systems are not constrained by the biological limits that make human memory attrition necessary. The goal is not to mimic those limits; it is to get consolidation right so that what is in memory is always the right thing to retrieve. The architecture is documented at [hindsight.vectorize.io](https://hindsight.vectorize.io), and the source is MIT-licensed on GitHub.
 
 **Further reading:**
 
