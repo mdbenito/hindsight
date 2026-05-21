@@ -10,6 +10,10 @@ Persistent long-term memory for [Hermes Agent](https://github.com/NousResearch/h
 
 ## Quick Start
 
+:::tip Hindsight Cloud (recommended)
+[Sign up free](https://ui.hindsight.vectorize.io/signup) — get an API key instantly, no infrastructure to run.
+:::
+
 **1. Get an API key** at [ui.hindsight.vectorize.io/connect](https://ui.hindsight.vectorize.io/connect). The API endpoint is `https://api.hindsight.vectorize.io`.
 
 **2. Run the setup wizard:**
