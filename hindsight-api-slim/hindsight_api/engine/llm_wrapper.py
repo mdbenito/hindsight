@@ -312,6 +312,7 @@ def create_llm_provider(
         "openai",
         "groq",
         "ollama",
+        "ollama-cloud",
         "lmstudio",
         "minimax",
         "deepseek",
@@ -409,6 +410,7 @@ class LLMProvider:
             "openai",
             "groq",
             "ollama",
+            "ollama-cloud",
             "gemini",
             "anthropic",
             "lmstudio",
@@ -437,6 +439,8 @@ class LLMProvider:
                 self.base_url = "https://api.groq.com/openai/v1"
             elif self.provider == "ollama":
                 self.base_url = "http://localhost:11434/v1"
+            elif self.provider == "ollama-cloud":
+                self.base_url = "https://ollama.com/v1"
             elif self.provider == "lmstudio":
                 self.base_url = "http://localhost:1234/v1"
             elif self.provider == "minimax":
