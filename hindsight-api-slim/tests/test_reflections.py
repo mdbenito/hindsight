@@ -401,6 +401,11 @@ class TestRecallWithObservationsAndMentalModels:
 class TestReflectUsesMentalModels:
     """Test that reflect searches and uses mental models when available."""
 
+    @pytest.fixture
+    def memory(self, memory_real_llm):
+        """Override to use real LLM — reflect tool-calling requires a real model."""
+        return memory_real_llm
+
     # Reflect doesn't pin a tool-call temperature, so weaker models in the
     # acceptance matrix (e.g. gemini-2.5-flash-lite) occasionally pick `recall`
     # or `search_observations` instead of `search_mental_models`. Rerun a
@@ -457,14 +462,21 @@ class TestReflectUsesMentalModels:
         for tc in search_mm_calls:
             assert tc.reason is not None, "Tool call should have a reason for debugging"
 
-        # The response should mention concepts from the mental model
-        response_text = result.text.lower()
-        has_relevant_content = any(
-            keyword in response_text
-            for keyword in ["slack", "async", "standup", "code review", "documentation", "communication"]
-        )
-        assert has_relevant_content, (
-            f"Expected response to reference mental model content. Got: {result.text[:500]}"
+        # The response should reference concepts from the mental model
+        from tests.llm_judge import assert_meets_criteria
+
+        await assert_meets_criteria(
+            response=result.text,
+            criteria=(
+                "The response references at least one concept from the team's collaboration practices: "
+                "async communication, Slack, daily standups, code reviews, documentation, or written communication."
+            ),
+            context=(
+                "Mental model content: The team uses async communication via Slack and holds daily "
+                "standups at 9am. Code reviews are required before merging. The team values "
+                "documentation and prefers written communication for complex decisions."
+            ),
+            msg=f"Expected response to reference mental model content. Got: {result.text[:500]}",
         )
 
         # Cleanup
