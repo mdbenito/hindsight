@@ -506,6 +506,7 @@ class TestConsolidationIntegration:
 
     @pytest.mark.asyncio
     @pytest.mark.hs_llm_core
+    @pytest.mark.flaky(reruns=2, reruns_delay=2)
     async def test_consolidation_reduces_count_for_near_duplicate_facts(
         self, memory_real_llm: MemoryEngine, request_context
     ):

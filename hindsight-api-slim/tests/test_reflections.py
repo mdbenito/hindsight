@@ -482,6 +482,7 @@ class TestReflectUsesMentalModels:
         # Cleanup
         await memory.delete_bank(bank_id, request_context=request_context)
 
+    @pytest.mark.hs_llm_core
     @pytest.mark.asyncio
     async def test_reflect_tool_trace_includes_reason(self, memory: MemoryEngine, request_context):
         """Test that tool traces include the reason field for debugging."""

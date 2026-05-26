@@ -207,12 +207,18 @@ class TestDispositionInfluence:
 
     @pytest.mark.asyncio
     @pytest.mark.flaky(reruns=2, reruns_delay=2)
-    async def test_low_vs_high_skepticism_produces_different_responses(self, memory: MemoryEngine, request_context):
-        """Skepticism=1 and skepticism=5 banks should produce noticeably different responses.
+    async def test_high_skepticism_response_is_more_hedged_than_low(
+        self, memory: MemoryEngine, request_context
+    ):
+        """Skepticism=5 should produce a measurably more hedged response than skepticism=1.
 
-        This is a smoke test: the two dispositions should not produce identical output,
-        confirming that the disposition trait is actually wired into the prompt.
+        A string-inequality check would pass purely from LLM sampling variance, so we
+        give both responses to the judge and ask it which one shows more skepticism.
+        This catches the case where the disposition trait isn't wired into the prompt
+        at all — both responses would then look equally confident.
         """
+        from tests.llm_judge import assert_meets_criteria
+
         claim = "Sam is supposedly the most productive engineer on the team by a wide margin."
         query = "What can you tell me about Sam's productivity?"
 
@@ -232,9 +238,35 @@ class TestDispositionInfluence:
             high_result = await memory.reflect_async(bank_id=bank_high, query=query, request_context=request_context)
 
             assert low_result.text and high_result.text
-            assert low_result.text.strip() != high_result.text.strip(), (
-                "Skepticism=1 and skepticism=5 should produce different responses for the same query. "
-                f"Both returned: {low_result.text[:300]}"
+
+            # Judge compares the two responses for relative skepticism.  Presenting both
+            # in a single prompt lets it evaluate which is more hedged — sampling
+            # variance alone won't satisfy this criterion.
+            comparison = (
+                f"RESPONSE A (from bank with skepticism=5/5):\n{high_result.text}\n\n"
+                f"---\n\n"
+                f"RESPONSE B (from bank with skepticism=1/5):\n{low_result.text}"
+            )
+
+            await assert_meets_criteria(
+                response=comparison,
+                criteria=(
+                    "Response A shows more skepticism than Response B about the productivity "
+                    "claim — A uses more hedging language ('apparently', 'reportedly', 'might', "
+                    "'allegedly', etc.) or more explicitly flags the claim as unverified, while "
+                    "B states it more directly or with less qualification.  If the two responses "
+                    "show the same level of skepticism, the criterion is NOT met."
+                ),
+                context=(
+                    "Both banks stored the same claim ('Sam is supposedly the most productive "
+                    "engineer...') and were asked the same query.  The only difference is "
+                    "their skepticism disposition trait.  A: skepticism=5, B: skepticism=1."
+                ),
+                msg=(
+                    f"Disposition should make response A more skeptical than B.\n"
+                    f"  A (skepticism=5): {high_result.text[:300]}\n"
+                    f"  B (skepticism=1): {low_result.text[:300]}"
+                ),
             )
         finally:
             await memory.delete_bank(bank_low, request_context=request_context)
