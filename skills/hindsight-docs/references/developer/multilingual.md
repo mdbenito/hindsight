@@ -238,18 +238,6 @@ Common patterns:
 
 Leave `HINDSIGHT_API_LLM_OUTPUT_LANGUAGE` unset to preserve the source/query language across the pipeline (the default).
 
-#### Backfilling After a Language Change
-
-Both `HINDSIGHT_API_TEXT_SEARCH_EXTENSION_NATIVE_LANGUAGE` and the bank's BM25 backend only affect newly-written rows — existing rows keep whatever lexemes were computed at their insert time. To re-index existing `native`-backend data in a new language:
-
-```sql
-UPDATE memory_units
-SET search_vector = to_tsvector('<new_language>'::regconfig,
-    COALESCE(text, '') || ' ' || COALESCE(context, '') || ' ' || COALESCE(text_signals, ''));
-```
-
-For backend switches (e.g. `native` → `pgroonga`), the safest path is an empty database; otherwise Hindsight will refuse to convert and ask you to clear `memory_units` and `reflections` first.
-
 ---
 
 ## Best Practices
