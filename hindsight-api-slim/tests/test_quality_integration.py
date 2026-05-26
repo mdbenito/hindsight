@@ -148,62 +148,17 @@ class TestEndToEndPipeline:
 class TestDispositionInfluence:
     """Test that disposition traits produce observable differences in reflect output.
 
-    These are the first tests for disposition — previously there were zero.
-    The suite only verifies one direction (skepticism) since it has the clearest
-    prompt effect; other traits can be added as needed.
+    These are the first tests for disposition — previously there were zero.  The
+    suite verifies skepticism via a *comparative* assertion (does skepticism=5
+    produce a more hedged response than skepticism=1) rather than an absolute one,
+    because the absolute level of hedging varies a lot by model.  A comparative
+    test still catches the bug we care about: disposition isn't wired into the
+    prompt at all (both responses would then read the same).
     """
 
     @pytest.fixture
     def memory(self, memory_real_llm):
         return memory_real_llm
-
-    @pytest.mark.asyncio
-    @pytest.mark.flaky(reruns=2, reruns_delay=2)
-    async def test_high_skepticism_hedges_unverifiable_claims(self, memory: MemoryEngine, request_context):
-        """Maximum skepticism (5) should produce hedging language for uncertain claims.
-
-        An unverifiable rumour stored as a fact should elicit qualifications like
-        'apparently', 'reportedly', 'might', 'it seems' etc. from a high-skepticism
-        bank — language a low-skepticism bank would typically omit.
-        """
-        from tests.llm_judge import assert_meets_criteria
-
-        claim = (
-            "Apparently James has won every single hackathon he has ever entered "
-            "and is widely considered unbeatable by his peers."
-        )
-        query = "How good is James at hackathons?"
-
-        bank_skeptical = f"test-disposition-skeptical-{uuid.uuid4().hex[:8]}"
-        try:
-            await memory.get_bank_profile(bank_id=bank_skeptical, request_context=request_context)
-            await memory.update_bank_disposition(
-                bank_skeptical,
-                {"skepticism": 5, "literalism": 3, "empathy": 3},
-                request_context=request_context,
-            )
-            await memory.retain_async(bank_id=bank_skeptical, content=claim, request_context=request_context)
-
-            skeptical_result = await memory.reflect_async(
-                bank_id=bank_skeptical,
-                query=query,
-                request_context=request_context,
-            )
-            assert skeptical_result.text
-
-            await assert_meets_criteria(
-                response=skeptical_result.text,
-                criteria=(
-                    "The response uses hedging or qualifying language — words or phrases such as "
-                    "'apparently', 'reportedly', 'it seems', 'might', 'may', 'could', 'allegedly', "
-                    "'claimed', 'supposedly', or similar — reflecting appropriate skepticism about "
-                    "an unverified claim."
-                ),
-                context=f"Bank has maximum skepticism (5/5). The stored claim was: '{claim}'",
-                msg=f"High-skepticism response should hedge unverifiable claims. Got: {skeptical_result.text[:500]}",
-            )
-        finally:
-            await memory.delete_bank(bank_skeptical, request_context=request_context)
 
     @pytest.mark.asyncio
     @pytest.mark.flaky(reruns=2, reruns_delay=2)

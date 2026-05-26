@@ -388,7 +388,9 @@ class TestConsolidationIntegration:
                 people_mentioned = sum(1 for name in ["john", "mary", "bob"] if name in text)
                 assert people_mentioned <= 1, f"Observation should not merge different people: {obs['text']}"
 
-            all_obs_text = " | ".join(obs["text"] for obs in observations)
+            obs_listing = "\n".join(
+                f"Observation {i + 1}: {obs['text']}" for i, obs in enumerate(observations)
+            )
 
         # Semantic backup: catch the case where the LLM merges facts about different
         # people using pronouns or referent shifts that bypass the proper-noun check
@@ -397,11 +399,12 @@ class TestConsolidationIntegration:
         from tests.llm_judge import assert_meets_criteria
 
         await assert_meets_criteria(
-            response=all_obs_text,
+            response=obs_listing,
             criteria=(
-                "Each observation is focused on a single individual's fact. No observation "
-                "blends or conflates facts about multiple different people (John, Mary, and Bob "
-                "should each have their own observations, not a combined one)."
+                "No single observation in the numbered list blends facts about multiple different "
+                "people. It's fine if there are several observations and each focuses on one person "
+                "(John, Mary, or Bob); the failure case is a single observation that conflates "
+                "two or more of them into one combined statement."
             ),
             context=(
                 "Three independent facts were stored: 'John lives in New York.', "

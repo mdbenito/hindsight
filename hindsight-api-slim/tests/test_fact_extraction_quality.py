@@ -820,29 +820,27 @@ I've learned so much from it.
         )
 
         assert len(facts) > 0, "Should extract at least one fact"
-        all_facts_text = " ".join(f.fact for f in facts)
 
-        # Pronoun resolution is the behaviour being tested: "It's been really challenging"
-        # must be tied back to the ML project, not left as a dangling "it".  The judge
-        # evaluates this semantically so paraphrases ("the work was difficult but
-        # fulfilling") still satisfy the criterion.
-        from tests.llm_judge import assert_meets_criteria
+        # Pronoun resolution is a *structural* property — every fact that describes a
+        # quality (challenging, rewarding, learning) must also name a specific anchor
+        # noun (project / work / ML / etc.) in that same fact.  The judge handled
+        # this poorly in practice (hallucinating about pronouns that weren't there),
+        # so this check is done deterministically: each quality-describing fact must
+        # mention a project-anchor noun.
+        quality_words = ("challenging", "rewarding", "learn", "demanding", "fulfilling", "rough", "tough")
+        anchor_words = ("project", "ml", "machine learning", "work")
 
-        await assert_meets_criteria(
-            response=all_facts_text,
-            criteria=(
-                "The extracted facts resolve the pronoun 'it' to refer to the machine learning "
-                "project, NOT leaving any fact with an ambiguous 'it' as the subject. Either the "
-                "qualities (challenging, rewarding, learning from it) appear in the same fact as "
-                "the project, or the project is named explicitly in the facts that describe those "
-                "qualities. Equivalent phrasing — 'the work was demanding but fulfilling' — counts."
-            ),
-            context=(
-                "Input: 'I started a new machine learning project last month. It's been really "
-                "challenging but very rewarding. I've learned so much from it.' The pronouns 'it' "
-                "in sentences 2 and 3 refer to the project from sentence 1."
-            ),
-            msg=f"Pronoun 'it' should be resolved to the project. Facts: {[f.fact for f in facts]}",
+        bad_facts = []
+        for f in facts:
+            fact_lower = f.fact.lower()
+            if any(q in fact_lower for q in quality_words) and not any(a in fact_lower for a in anchor_words):
+                bad_facts.append(f.fact)
+
+        assert not bad_facts, (
+            f"Pronoun 'it' should be resolved to a specific noun anchor in every "
+            f"quality-describing fact, but these facts lack a project/work/ML anchor:\n"
+            + "\n".join(f"  - {bf}" for bf in bad_facts)
+            + f"\nAll facts: {[f.fact for f in facts]}"
         )
 
 
