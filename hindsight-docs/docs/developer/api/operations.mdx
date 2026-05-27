@@ -60,7 +60,7 @@ When you list operations, the parent and its children all appear by default. Pas
 
 Submitted by file upload endpoints. The handler runs MIME-specific conversion (PDF → text, DOCX → text, etc.) and then passes the extracted text into the retain pipeline. Failures here are **non-retryable** by default — a corrupted PDF or missing OCR won't improve on rerun, so the operation goes straight to `failed`.
 
-Which converter runs (markitdown, Docling, LlamaParse, etc.) is selected per deployment via the file-conversion processor settings — see [Configuration → File Processing](../configuration#file-processing).
+Which parser runs (`markitdown`, `iris`, or `llama_parse`) is selected per deployment via `HINDSIGHT_API_FILE_PARSER`, and clients can override it per request — see [Configuration → File Processing](../configuration#file-processing).
 
 ### `consolidation`
 
