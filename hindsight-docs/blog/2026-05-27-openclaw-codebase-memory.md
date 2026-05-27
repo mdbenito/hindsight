@@ -1,7 +1,7 @@
 ---
 title: "Building an OpenClaw Coding Agent That Remembers Your Codebase"
 authors: [benfrank241]
-date: 2026-05-26T12:00
+date: 2026-05-27T12:00
 tags: [openclaw, coding, memory, agents, tutorial, hindsight]
 description: "OpenClaw with Hindsight remembers your codebase across sessions — conventions, past bugs, architectural decisions. Setup in 2 minutes."
 image: /img/blog/openclaw-coding-agent-codebase-memory.png
