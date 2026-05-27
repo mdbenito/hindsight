@@ -160,7 +160,11 @@ class TestDispositionInfluence:
         This catches the case where the disposition trait isn't wired into the prompt
         at all — both responses would then look equally confident.
         """
-        claim = "Sam is supposedly the most productive engineer on the team by a wide margin."
+        # The claim is stated as a direct assertion (no built-in hedges like
+        # "supposedly" / "reportedly"). If the source text already hedges, both
+        # low- and high-skepticism reflects tend to echo the hedge, shrinking
+        # the gap the judge has to detect.
+        claim = "Sam is the most productive engineer on the team by a wide margin."
         query = "What can you tell me about Sam's productivity?"
 
         bank_low = f"test-disposition-low-{uuid.uuid4().hex[:8]}"
@@ -199,9 +203,9 @@ class TestDispositionInfluence:
                     "show the same level of skepticism, the criterion is NOT met."
                 ),
                 context=(
-                    "Both banks stored the same claim ('Sam is supposedly the most productive "
-                    "engineer...') and were asked the same query.  The only difference is "
-                    "their skepticism disposition trait.  A: skepticism=5, B: skepticism=1."
+                    "Both banks stored the same claim ('Sam is the most productive engineer "
+                    "on the team by a wide margin.') and were asked the same query. The only "
+                    "difference is their skepticism disposition trait. A: skepticism=5, B: skepticism=1."
                 ),
                 msg=(
                     f"Disposition should make response A more skeptical than B.\n"
