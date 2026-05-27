@@ -505,10 +505,12 @@ class TestStaleCooccurrencePrune:
         assert result["orphan_entities_pruned"] == 0
 
         async with pool.acquire() as conn:
+            # Match canonical ordering enforced by entity_cooccurrence_order_check.
+            first, second = sorted([ent_a, ent_b])
             remaining = await conn.fetchval(
                 "SELECT COUNT(*) FROM entity_cooccurrences WHERE entity_id_1 = $1 AND entity_id_2 = $2",
-                ent_a,
-                ent_b,
+                first,
+                second,
             )
             assert remaining == 0
 
@@ -535,10 +537,12 @@ class TestStaleCooccurrencePrune:
         assert result["stale_cooccurrences_pruned"] == 0
 
         async with pool.acquire() as conn:
+            # Match canonical ordering enforced by entity_cooccurrence_order_check.
+            first, second = sorted([ent_a, ent_b])
             still_there = await conn.fetchval(
                 "SELECT cooccurrence_count FROM entity_cooccurrences WHERE entity_id_1 = $1 AND entity_id_2 = $2",
-                ent_a,
-                ent_b,
+                first,
+                second,
             )
             assert still_there == 5
 

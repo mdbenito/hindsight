@@ -140,8 +140,7 @@ const { data: flat } = await sdk.listOperations({
 ### CLI
 
 ```bash
-# List recent operations for a bank (default: 20 most recent).
-hindsight operation list $BANK_ID
+hindsight operation list my-bank
 ```
 
 ### Go
@@ -180,7 +179,7 @@ const { data: detailed } = await sdk.getOperationStatus({
 ### CLI
 
 ```bash
-hindsight operation get $BANK_ID $OPERATION_ID
+hindsight operation get my-bank "$OPERATION_ID"
 ```
 
 ### Go
@@ -213,8 +212,7 @@ await sdk.cancelOperation({
 ### CLI
 
 ```bash
-# Cancel a pending operation before a worker claims it.
-hindsight operation cancel $BANK_ID $OPERATION_ID
+hindsight operation cancel my-bank "$OPERATION_ID"
 ```
 
 ### Go
@@ -247,8 +245,7 @@ await sdk.retryOperation({
 ### CLI
 
 ```bash
-# Re-queue a failed (or cancelled) operation.
-hindsight operation retry $BANK_ID $OPERATION_ID
+hindsight operation retry my-bank "$OPERATION_ID"
 ```
 
 ### Go
@@ -264,27 +261,7 @@ Submit a batch asynchronously and poll until the operation completes:
 ### Python
 
 ```python
-# Submit a large batch asynchronously — the call returns immediately with an
-# operation_id you can poll.
-submission = client.retain_batch(
-    bank_id="my-bank",
-    items=[
-        {"content": "Alice joined Google in 2023"},
-        {"content": "Bob prefers Python over JavaScript"},
-    ],
-    retain_async=True,
-)
-operation_id = submission.operation_id
-
-async def _wait_for_completion() -> None:
-    while True:
-        status = await client.operations.get_operation_status("my-bank", operation_id)
-        if status.status in ("completed", "failed", "cancelled"):
-            print(f"finished: {status.status}")
-            return
-        await asyncio.sleep(2)
-
-asyncio.run(_wait_for_completion())
+# Section 'operations-async-retain' not found in api/operations.py
 ```
 
 ### Node.js
@@ -309,6 +286,26 @@ while (true) {
     }
     await new Promise((r) => setTimeout(r, 2000));
 }
+```
+
+### CLI
+
+```bash
+# Submit an async retain and capture the operation_id from the JSON response.
+OPERATION_ID=$(
+  hindsight memory retain my-bank "Alice joined Google in 2023" --async -o json \
+    | jq -r '.operation_id'
+)
+
+# Poll until the worker finishes — completed/failed/cancelled are all terminal.
+while true; do
+  STATUS=$(hindsight operation get my-bank "$OPERATION_ID" -o json | jq -r '.status')
+  if [ "$STATUS" = "completed" ] || [ "$STATUS" = "failed" ] || [ "$STATUS" = "cancelled" ]; then
+    echo "finished: $STATUS"
+    break
+  fi
+  sleep 2
+done
 ```
 
 ### Go
