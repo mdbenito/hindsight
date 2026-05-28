@@ -14,40 +14,27 @@ Grok Build natively reads Claude Code plugin format — hooks, MCP servers, skil
 
 ## Quick Start
 
-:::tip Recommended: Hindsight Cloud
-[Sign up free](https://ui.hindsight.vectorize.io/signup) for a Hindsight Cloud API key — no self-hosting, no local daemon to manage.
-:::
-
 ```bash
-# 1. Install the plugin directly from the Hindsight repo
-grok plugin install vectorize-io/hindsight#hindsight-integrations/claude-code --trust
+# 1. Add the Hindsight marketplace and install the plugin
+grok plugin marketplace add vectorize-io/hindsight
+grok plugin install hindsight-memory
 
-# 2. Configure your connection
+# 2. Configure your LLM provider for memory extraction
+# Option A: OpenAI (auto-detected)
+export OPENAI_API_KEY="sk-your-key"
+
+# Option B: Anthropic (auto-detected)
+export ANTHROPIC_API_KEY="your-key"
+
+# Option C: Connect to an external Hindsight server instead of running locally
 mkdir -p ~/.hindsight
-cat > ~/.hindsight/claude-code.json << 'EOF'
-{
-  "hindsightApiUrl": "https://api.hindsight.vectorize.io",
-  "hindsightApiToken": "YOUR_API_KEY"
-}
-EOF
+echo '{"hindsightApiUrl": "https://your-hindsight-server.com"}' > ~/.hindsight/claude-code.json
 
-# 3. Start Grok Build — memory works automatically
+# 3. Start Grok Build — the plugin activates automatically
 grok
 ```
 
 That's it! The plugin will automatically start capturing and recalling memories.
-
-### Using a local daemon instead
-
-If you prefer to run Hindsight locally, set an LLM API key and leave `hindsightApiUrl` empty:
-
-```bash
-export OPENAI_API_KEY="sk-your-key"
-# or
-export ANTHROPIC_API_KEY="your-key"
-```
-
-The plugin will auto-start a local `hindsight-embed` daemon.
 
 ## Features
 
