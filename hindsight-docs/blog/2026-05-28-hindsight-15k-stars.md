@@ -38,7 +38,7 @@ We didn't want to write a second "thanks for the stars" post. So instead, here's
 | n8n | [The memory layer every n8n workflow was missing](/blog/2026/05/07/n8n-persistent-memory) |
 | Paperclip | [Adding persistent memory to Paperclip agents](/blog/2026/05/26/paperclip-persistent-memory) |
 
-That brings the official integration count to 27. Three more (Vercel AI SDK, AG2, Gemini Spark) are in flight.
+That brings the official integration count to 27.
 
 ## The Constellation Graph View
 
