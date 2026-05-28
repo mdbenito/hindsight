@@ -87,9 +87,7 @@ def make_end_of_call(transcript: str) -> dict:
     }
 
 
-async def cmd_end_call(
-    webhook: HindsightVapiWebhook, transcript: str, wait_seconds: int = 8
-) -> None:
+async def cmd_end_call(webhook: HindsightVapiWebhook, transcript: str, wait_seconds: int = 8) -> None:
     banner("WEBHOOK: end-of-call-report", CYAN)
     print(f"transcript length: {len(transcript)} chars")
     event = make_end_of_call(transcript)
@@ -128,9 +126,7 @@ async def cmd_assistant_request(webhook: HindsightVapiWebhook, caller: str | Non
         print(content[:500] + ("..." if len(content) > 500 else ""))
 
 
-async def cmd_script(
-    webhook: HindsightVapiWebhook, url: str, bank: str, api_key: str | None
-) -> None:
+async def cmd_script(webhook: HindsightVapiWebhook, url: str, bank: str, api_key: str | None) -> None:
     """Run a scripted demo that proves the full retain → recall cycle."""
     print(f"\n{GREEN}=== Scripted demo: Alex's first + second call ==={RESET}\n")
 
@@ -160,9 +156,7 @@ async def cmd_script(
 async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--bank", default=f"vapi-demo-{os.environ.get('USER', 'anon')}")
-    parser.add_argument(
-        "--hindsight-url", default=os.environ.get("HINDSIGHT_API_URL", "http://localhost:8888")
-    )
+    parser.add_argument("--hindsight-url", default=os.environ.get("HINDSIGHT_API_URL", "http://localhost:8888"))
     parser.add_argument("--hindsight-api-key", default=os.environ.get("HINDSIGHT_API_KEY"))
     args = parser.parse_args()
 
