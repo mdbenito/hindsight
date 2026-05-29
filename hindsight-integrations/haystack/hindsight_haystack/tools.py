@@ -6,6 +6,7 @@ instances backed by Hindsight's retain/recall/reflect APIs, and a
 """
 
 import asyncio
+import atexit
 import json
 import logging
 import threading
@@ -51,6 +52,39 @@ def _run_sync(coro):  # type: ignore[no-untyped-def]
     return future.result()
 
 
+# Hindsight clients this module creates (i.e. when the caller did not pass their
+# own ``client=``). Their aiohttp sessions live on the background ``_loop`` and
+# would otherwise leak "Unclosed client session/connector" warnings at exit, so
+# we close them on that loop via an atexit hook. Caller-owned clients are left
+# to the caller to close.
+_owned_clients: list[Hindsight] = []
+_owned_clients_lock = threading.Lock()
+
+
+def _register_owned_client(client: Hindsight) -> None:
+    with _owned_clients_lock:
+        _owned_clients.append(client)
+
+
+@atexit.register
+def _shutdown() -> None:
+    """Close module-owned clients on the background loop, then stop it."""
+    if _loop.is_closed() or not _loop.is_running():
+        return
+    with _owned_clients_lock:
+        clients = list(_owned_clients)
+        _owned_clients.clear()
+    for client in clients:
+        try:
+            asyncio.run_coroutine_threadsafe(client.aclose(), _loop).result(timeout=5)
+        except Exception:
+            pass
+    try:
+        _loop.call_soon_threadsafe(_loop.stop)
+    except Exception:
+        pass
+
+
 DEFAULT_MEMORY_PROMPT = (
     "Below are relevant memories from previous conversations:\n{memories}\n"
     "Use these memories to provide more personalized and contextual responses."
@@ -93,7 +127,12 @@ class _HindsightToolBackend:
         # Bank management
         mission: Optional[str] = None,
     ):
+        # When the caller didn't pass a client, resolve_client() created one we
+        # own — register it for cleanup at exit (its session lives on _loop).
+        _owns_client = client is None
         self._client = resolve_client(client, hindsight_api_url, api_key)
+        if _owns_client:
+            _register_owned_client(self._client)
         self._bank_id = bank_id
         self._session_id = str(uuid.uuid4())[:8]
         self._bank_initialized = False

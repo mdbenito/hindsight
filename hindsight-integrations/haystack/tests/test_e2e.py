@@ -17,7 +17,7 @@ deterministic PR-CI bucket and run on its own / nightly.
 
 from __future__ import annotations
 
-import asyncio
+import logging
 import os
 import time
 import uuid
@@ -27,6 +27,7 @@ import requests
 from hindsight_client import Hindsight
 
 from hindsight_haystack import create_hindsight_tools
+from hindsight_haystack.tools import _run_sync
 
 HINDSIGHT_API_URL = os.getenv("HINDSIGHT_API_URL", "http://localhost:8888")
 _NO_MEMORIES = "No relevant memories found."
@@ -71,17 +72,20 @@ def _recall_until_nonempty(recall_tool, query, attempts=12, delay=1.0):
 def live():
     client = Hindsight(base_url=HINDSIGHT_API_URL)
     bank_id = f"haystack-e2e-{uuid.uuid4().hex[:8]}"
-    client.create_bank(bank_id, name=f"Haystack E2E {bank_id}")
+    # Run all client I/O on the tools' background loop so the aiohttp session is
+    # created and closed on the same loop (avoids unclosed-connector warnings).
+    _run_sync(client.acreate_bank(bank_id, name=f"Haystack E2E {bank_id}"))
     try:
         yield client, bank_id
     finally:
         try:
-            loop = asyncio.new_event_loop()
-            loop.run_until_complete(client.adelete_bank(bank_id))
-            loop.run_until_complete(client.aclose())
-            loop.close()
-        except Exception:
-            pass
+            _run_sync(client.adelete_bank(bank_id))
+        except Exception as e:
+            logging.getLogger(__name__).warning("E2E bank cleanup failed: %s", e)
+        try:
+            _run_sync(client.aclose())
+        except Exception as e:
+            logging.getLogger(__name__).warning("E2E client close failed: %s", e)
 
 
 class TestE2ETools:
