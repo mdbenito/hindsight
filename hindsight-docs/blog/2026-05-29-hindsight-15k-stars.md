@@ -1,8 +1,8 @@
 ---
 title: "Hindsight Hits 15,000 Stars: What's Shipped Since 10k"
 description: "Five weeks after the 10k milestone, Hindsight is at 15k GitHub stars. Here's what shipped in the open-source repo: 7 versions, 6 new integrations, and the Constellation graph view."
-slug: "2026/05/28/hindsight-15k-stars"
-date: 2026-05-28T12:00
+slug: "2026/05/29/hindsight-15k-stars"
+date: 2026-05-29T12:00
 image: "/img/blog/hindsight-15k-stars.png"
 tags: [release, milestone]
 hide_table_of_contents: true
