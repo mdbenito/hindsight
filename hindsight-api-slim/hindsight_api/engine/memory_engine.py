@@ -8224,9 +8224,11 @@ class MemoryEngine(MemoryEngineInterface):
             # (bank_id, link_type) index this is an index-only scan; without one
             # it is at worst a single seq scan over memory_links rather than the
             # multi-second hash join through memory_units that this used to be.
-            # The previous shape produced a (fact_type, link_type) matrix that no
-            # consumer reads (see PR description) — we kept the response keys
-            # populated below for schema stability.
+            # The previous shape produced a (fact_type, link_type) matrix; only
+            # the hindsight-cli `bank stats` renderer still consumes the
+            # per-fact-type slice, and it tolerates empty maps (the section
+            # prints with no rows). Response keys are kept populated below for
+            # schema stability so existing SDK deserializers don't break.
             non_entity_link_rows = await conn.fetch(
                 f"""
                 SELECT link_type, COUNT(*) as count
@@ -8240,8 +8242,10 @@ class MemoryEngine(MemoryEngineInterface):
             # Entity links are derived from unit_entities (no longer stored in
             # memory_links). Replicate the historical writer cap: each unit
             # linked bidirectionally to up to MAX_LINKS_PER_ENTITY others sharing
-            # each entity. Aggregated to a single scalar — fact_type slicing is
-            # not consumed anywhere and used to double the join cost.
+            # each entity. Aggregated to a single scalar — the per-fact-type
+            # slice doubled the join cost and only fed link_counts_by_fact_type
+            # / link_breakdown, which the UI ignores and the CLI renders into
+            # sections that degrade gracefully when empty.
             max_links_per_entity = 10
             entity_total_row = await conn.fetchrow(
                 f"""
@@ -8294,9 +8298,12 @@ class MemoryEngine(MemoryEngineInterface):
             last_consolidated_at = consolidation_row["last_consolidated_at"] if consolidation_row else None
 
             # link_counts_by_fact_type and link_breakdown are retained in the
-            # response shape but no longer populated — no consumer reads them and
-            # producing them required the expensive memory_links⇒memory_units
-            # join we just deleted. They can be removed entirely once downstream
+            # response shape but no longer populated — producing them required
+            # the expensive memory_links⇒memory_units join we just deleted. The
+            # UI does not read them; hindsight-cli `bank stats` does, and after
+            # this change its "Links by Fact Type" section prints empty and the
+            # "Detailed Link Breakdown" section is skipped (`is_empty()` guard).
+            # Drop these keys, and the matching CLI rendering, once downstream
             # SDKs are regenerated.
             return {
                 "bank_id": bank_id,
