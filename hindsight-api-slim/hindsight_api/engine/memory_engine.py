@@ -16,7 +16,7 @@ import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
@@ -115,12 +115,17 @@ _VALIDATE_SQL_SCHEMAS = True
 # filtered upstream by `_is_non_retryable_task_error` and never reach the
 # retry path. The dedup-by-bank guard prevents per-op retries from
 # multiplying when a peer consolidation is already pending for the bank.
-_CONSOLIDATION_RETRY_BACKOFF_BASE_SECONDS = 60
+#
+# Base is intentionally short so a momentary 5xx clears in seconds, not
+# minutes; the cap is preserved so a genuine multi-hour outage doesn't hammer
+# the upstream. Issue #1842 observed banks sitting idle for whole minutes on
+# transient LLM blips because the prior 60s base overshot recovery by 10x+.
+_CONSOLIDATION_RETRY_BACKOFF_BASE_SECONDS = 5
 _CONSOLIDATION_RETRY_BACKOFF_MAX_SECONDS = 1800  # 30 min cap
 
 
 def _consolidation_retry_backoff_seconds(retry_count: int) -> int:
-    """Capped exponential backoff: 60, 120, 240, 480, 960, 1800, 1800, …"""
+    """Capped exponential backoff: 5, 10, 20, 40, 80, 160, 320, 640, 1280, 1800, 1800, …"""
     return min(
         _CONSOLIDATION_RETRY_BACKOFF_BASE_SECONDS * (2**retry_count),
         _CONSOLIDATION_RETRY_BACKOFF_MAX_SECONDS,
@@ -237,7 +242,7 @@ from .retain import bank_utils, embedding_utils
 from .retain.types import RetainContentDict
 from .search import think_utils
 from .search.reranking import CrossEncoderReranker, apply_combined_scoring
-from .search.tags import TagGroup, TagsMatch, build_tags_where_clause
+from .search.tags import TagGroup, TagsMatch, build_tag_groups_where_clause, build_tags_where_clause
 from .task_backend import TaskBackend
 
 RetainOutboxCallback = Callable[[asyncpg.Connection], Awaitable[None]]
@@ -273,10 +278,18 @@ class _SubBatchSplit:
     user (such as ``retain_batch_async``) use this mapping to merge
     results belonging to the same original content back together when
     an oversized item was chunked across multiple sub-batches.
+
+    ``document_body_overrides[i]`` is the full original body of the
+    oversized item that produced ``sub_batches[i]``, or ``None`` when
+    the sub-batch was not produced by chunking an oversized item. The
+    orchestrator uses this as the ``documents.original_text`` payload
+    so that slicing an item across sub-batches does not persist a
+    partial body (see issue #1838).
     """
 
     sub_batches: list[list[RetainContentDict]]
     origin_indices: list[list[int]]
+    document_body_overrides: list[str | None] = field(default_factory=list)
 
 
 def _split_contents_into_sub_batches(
@@ -310,6 +323,7 @@ def _split_contents_into_sub_batches(
 
     sub_batches: list[list[RetainContentDict]] = []
     origin_indices: list[list[int]] = []
+    document_body_overrides: list[str | None] = []
     current_batch: list[RetainContentDict] = []
     current_batch_origins: list[int] = []
     current_batch_tokens = 0
@@ -319,6 +333,7 @@ def _split_contents_into_sub_batches(
         if current_batch:
             sub_batches.append(current_batch)
             origin_indices.append(current_batch_origins)
+            document_body_overrides.append(None)
             current_batch = []
             current_batch_origins = []
             current_batch_tokens = 0
@@ -334,12 +349,18 @@ def _split_contents_into_sub_batches(
             # original item's document_id and metadata so the
             # orchestrator's first-batch document tracking still
             # cascade-deletes the prior document version on slice 1.
+            # Each slice carries ``content_str`` as the document body
+            # override so the orchestrator writes the full original
+            # text to documents.original_text — not just its own slice
+            # (otherwise the last slice would clobber the body with a
+            # truncated payload; see issue #1838).
             _flush()
             chunks = fact_extraction.chunk_text(content_str, char_budget)
             for chunk in chunks:
                 chunk_item = cast(RetainContentDict, {**item, "content": chunk})
                 sub_batches.append([chunk_item])
                 origin_indices.append([original_idx])
+                document_body_overrides.append(content_str)
             continue
 
         if current_batch and current_batch_tokens + item_tokens > tokens_per_batch:
@@ -349,7 +370,11 @@ def _split_contents_into_sub_batches(
         current_batch_tokens += item_tokens
 
     _flush()
-    return _SubBatchSplit(sub_batches=sub_batches, origin_indices=origin_indices)
+    return _SubBatchSplit(
+        sub_batches=sub_batches,
+        origin_indices=origin_indices,
+        document_body_overrides=document_body_overrides,
+    )
 
 
 def _split_contents_into_async_children(
@@ -737,6 +762,7 @@ class MemoryEngine(MemoryEngineInterface):
         self._db_statement_timeout = config.db_statement_timeout
         self._run_migrations = run_migrations
         self._retain_entity_lookup = config.retain_entity_lookup
+        self._retain_entity_resolution_batch_size = config.retain_entity_resolution_batch_size
 
         # Webhook manager (will be created in initialize() after pool is ready)
         self._webhook_manager = None
@@ -1552,10 +1578,17 @@ class MemoryEngine(MemoryEngineInterface):
                             message=str(e),
                         )
 
-                    # Retryable: use RetryTaskAt if under the retry limit, else re-raise (poller marks failed)
+                    # Retryable: use RetryTaskAt if under the retry limit, else re-raise (poller marks failed).
+                    # Retry count and backoff come from config (HINDSIGHT_API_WORKER_MAX_RETRIES and
+                    # HINDSIGHT_API_WORKER_TASK_RETRY_BACKOFF_SECONDS). Defaults of 3 x 60s give a
+                    # 4-minute total window; operators expecting a longer provider outage can raise them.
+                    config = get_config()
                     retry_count = task_dict.get("_retry_count", 0)
-                    if retry_count < 3:
-                        raise RetryTaskAt(retry_at=datetime.now(UTC) + timedelta(seconds=60), message=str(e))
+                    if retry_count < config.worker_max_retries:
+                        raise RetryTaskAt(
+                            retry_at=datetime.now(UTC) + timedelta(seconds=config.worker_task_retry_backoff_seconds),
+                            message=str(e),
+                        )
                     raise
 
     async def _fire_consolidation_webhook(
@@ -2304,6 +2337,7 @@ class MemoryEngine(MemoryEngineInterface):
         self.entity_resolver = EntityResolver(
             self._backend,
             entity_lookup=self._retain_entity_lookup,
+            entity_resolution_batch_size=self._retain_entity_resolution_batch_size,
         )
 
         # Initialize config resolver for hierarchical configuration
@@ -2738,6 +2772,7 @@ class MemoryEngine(MemoryEngineInterface):
             split = _split_contents_into_sub_batches(contents, tokens_per_batch)
             sub_batches = split.sub_batches
             origin_indices = split.origin_indices
+            document_body_overrides = split.document_body_overrides
 
             sub_batch_sizes = [len(b) for b in sub_batches]
             # Keep the per-sub-batch sizes log compact when an oversize
@@ -2785,6 +2820,7 @@ class MemoryEngine(MemoryEngineInterface):
                     # webhook delivery row is committed atomically with the final retain data.
                     outbox_callback=outbox_callback if i == len(sub_batches) else None,
                     outbox_callback_factory=outbox_callback_factory if i == len(sub_batches) else None,
+                    document_body_override=document_body_overrides[i - 1],
                 )
                 # sub_results aligns 1:1 with sub_batch items; map each
                 # back to its source input via origin_indices so callers
@@ -2878,6 +2914,7 @@ class MemoryEngine(MemoryEngineInterface):
         outbox_callback: RetainOutboxCallback | None = None,
         outbox_callback_factory: RetainOutboxCallbackFactory | None = None,
         strategy: str | None = None,
+        document_body_override: str | None = None,
     ) -> tuple[list[list[str]], "TokenUsage", int | None]:
         """
         Internal method for batch processing without chunking logic.
@@ -2941,6 +2978,7 @@ class MemoryEngine(MemoryEngineInterface):
                 outbox_callback=outbox_callback,
                 outbox_callback_factory=outbox_callback_factory,
                 db_semaphore=self._put_semaphore,
+                document_body_override=document_body_override,
             )
 
     def recall(
@@ -6602,6 +6640,7 @@ class MemoryEngine(MemoryEngineInterface):
             bank_id=bank_id,
             tags=tags,
             tags_match=tags_match,
+            tag_groups=tag_groups,
             active_only=True,
             request_context=request_context,
             isolation_mode=True,
@@ -8768,7 +8807,8 @@ class MemoryEngine(MemoryEngineInterface):
         bank_id: str,
         *,
         tags: list[str] | None = None,
-        tags_match: str = "any",
+        tags_match: TagsMatch = "any",
+        tag_groups: list[TagGroup] | None = None,
         active_only: bool = True,
         limit: int = 100,
         offset: int = 0,
@@ -8779,15 +8819,19 @@ class MemoryEngine(MemoryEngineInterface):
 
         Args:
             bank_id: Bank identifier
-            tags: Optional tags to filter by
-            tags_match: How to match tags - 'any', 'all', or 'exact'
+            tags: Optional flat tags to filter by
+            tags_match: How to match tags - 'any', 'all', 'any_strict', or 'all_strict'
+            tag_groups: Optional compound tag filter (mutually independent of tags;
+                if both are provided each applies its own OR-with-untagged wrapping
+                and the two are AND-ed together)
             active_only: Only return active directives (default True)
             limit: Maximum number of results
             offset: Offset for pagination
             request_context: Request context for authentication
-            isolation_mode: When True and tags=None, only return directives with no tags.
-                This prevents tag-scoped directives from leaking into untagged operations.
-                Default False (normal API behavior - returns all directives when tags=None)
+            isolation_mode: When True and both tags and tag_groups are None, only
+                return directives with no tags. This prevents tag-scoped directives
+                from leaking into untagged operations. Default False (normal API
+                behavior - returns all directives when no tag filter is supplied).
 
         Returns:
             List of directive dicts
@@ -8809,12 +8853,17 @@ class MemoryEngine(MemoryEngineInterface):
             if active_only:
                 filters.append("is_active = TRUE")
 
-            # Apply tags filter for directives:
+            # Apply tag filters for directives:
             # Directives have special scoping rules:
             #   - Untagged directives (tags=[] or null) always apply regardless of reflect tags
             #   - Tagged directives only apply when the reflect operation includes matching tags
-            #   - If tags=None and isolation_mode=True: only untagged directives (no leakage)
-            #   - If tags=None and isolation_mode=False: all directives (normal API behavior)
+            #   - If no tag filter is supplied and isolation_mode=True: only untagged directives
+            #   - If no tag filter is supplied and isolation_mode=False: all directives (normal API behavior)
+            #
+            # When `tags` and `tag_groups` are both supplied (engine-level callers only;
+            # the public reflect/recall API rejects the combo at the request validator),
+            # both filters apply independently — each wrapped in the untagged-OR rule —
+            # so the directive set is the intersection of what either filter would admit.
             if tags:
                 tags_clause, tags_params, param_idx = build_tags_where_clause(
                     tags=tags, param_offset=param_idx, table_alias="", match=tags_match
@@ -8824,7 +8873,16 @@ class MemoryEngine(MemoryEngineInterface):
                     scoped_clause = tags_clause.replace("AND ", "", 1)
                     filters.append(f"((tags IS NULL OR tags = '{{}}') OR ({scoped_clause}))")
                     params.extend(tags_params)
-            elif isolation_mode:
+            if tag_groups:
+                groups_clause, groups_params, param_idx = build_tag_groups_where_clause(
+                    tag_groups, param_offset=param_idx
+                )
+                if groups_clause:
+                    # Same untagged-OR rule as the flat-tags branch above.
+                    scoped_clause = groups_clause.replace("AND ", "", 1)
+                    filters.append(f"((tags IS NULL OR tags = '{{}}') OR ({scoped_clause}))")
+                    params.extend(groups_params)
+            if not tags and not tag_groups and isolation_mode:
                 # Isolation mode: only include directives with empty/null tags
                 # This ensures tag-scoped directives don't apply to untagged operations
                 filters.append("(tags IS NULL OR tags = '{}')")
