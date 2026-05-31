@@ -296,6 +296,13 @@ export class ControlPlaneClient {
       metadata?: Record<string, string>;
       entities?: Array<{ text: string; type?: string }>;
       tags?: string[];
+      tag_enumerations?: Array<{
+        namespace: string;
+        description?: string;
+        type: "value" | "multi-values";
+        optional?: boolean;
+        values: Array<{ value: string; description?: string }>;
+      }>;
       observation_scopes?: "per_tag" | "combined" | "all_combinations" | string[][];
       strategy?: string;
     }>;

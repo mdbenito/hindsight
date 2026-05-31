@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { localizeApiErrorPayload } from "@/lib/i18n/api-errors";
-import { hindsightClient } from "@/lib/hindsight-client";
+import { sdk, lowLevelClient } from "@/lib/hindsight-client";
+import { respondWithSdk } from "@/lib/sdk-response";
 
 export async function POST(request: NextRequest) {
   try {
@@ -19,20 +20,35 @@ export async function POST(request: NextRequest) {
 
     const { items, document_id, document_tags, observation_scopes } = body;
 
-    // Map observation_scopes into each item if provided at request level
-    const mappedItems = observation_scopes
-      ? items?.map((item: any) => ({
+    // Apply request-level defaults to each item and ensure batch-level
+    // document_id propagates to items without their own. tag_enumerations,
+    // when present on an item, is forwarded verbatim; the dataplane validates
+    // its shape.
+    const mappedItems = Array.isArray(items)
+      ? items.map((item: any) => ({
           ...item,
           observation_scopes: item.observation_scopes ?? observation_scopes,
+          document_id: item.document_id ?? document_id,
         }))
       : items;
 
-    const response = await hindsightClient.retainBatch(bankId, mappedItems, {
-      documentId: document_id,
-      documentTags: document_tags,
+    // Bypass the HindsightClient.retainBatch wrapper here so per-item fields
+    // like `tag_enumerations` flow through unchanged. The wrapper explicitly
+    // whitelists known fields and would strip unknown ones.
+    //
+    // The cast is required because the generated SDK's MemoryItem type does
+    // not yet include `tag_enumerations`. The dataplane already accepts the
+    // field; SDK regen (Task 10) will make this cast unnecessary.
+    // TODO: remove cast after Task 10 SDK regen
+    const response = await sdk.retainMemories({
+      client: lowLevelClient,
+      path: { bank_id: bankId },
+      body: { items: mappedItems, document_tags } as unknown as Parameters<
+        typeof sdk.retainMemories
+      >[0]["body"],
     });
 
-    return NextResponse.json(response, { status: 200 });
+    return respondWithSdk(response, "Failed to batch retain", { request });
   } catch (error: any) {
     console.error("Error batch retain:", error);
 
