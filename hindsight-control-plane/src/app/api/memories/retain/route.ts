@@ -32,20 +32,10 @@ export async function POST(request: NextRequest) {
         }))
       : items;
 
-    // Bypass the HindsightClient.retainBatch wrapper here so per-item fields
-    // like `tag_enumerations` flow through unchanged. The wrapper explicitly
-    // whitelists known fields and would strip unknown ones.
-    //
-    // The cast is required because the generated SDK's MemoryItem type does
-    // not yet include `tag_enumerations`. The dataplane already accepts the
-    // field; SDK regen (Task 10) will make this cast unnecessary.
-    // TODO: remove cast after Task 10 SDK regen
     const response = await sdk.retainMemories({
       client: lowLevelClient,
       path: { bank_id: bankId },
-      body: { items: mappedItems, document_tags } as unknown as Parameters<
-        typeof sdk.retainMemories
-      >[0]["body"],
+      body: { items: mappedItems, document_tags },
     });
 
     return respondWithSdk(response, "Failed to batch retain", { request });
