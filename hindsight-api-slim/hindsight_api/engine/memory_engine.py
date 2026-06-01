@@ -2791,6 +2791,21 @@ class MemoryEngine(MemoryEngineInterface):
             # multiple sub-batches, unit_ids from every chunk get
             # appended back into that input's result slot.
             per_input_results: list[list[str]] = [[] for _ in contents]
+
+            # Per-document chunk_index offsets. When an oversized single item is
+            # sliced into several sub-batches that all share one document_id and
+            # run sequentially, each sub-batch must continue the document's
+            # chunk_index sequence rather than restart at 0 — otherwise the
+            # derived chunk_id ({bank}_{doc}_{index}) collides and later
+            # sub-batches overwrite earlier chunks, leaving only one sub-batch's
+            # worth of chunks/memories (issue #1888). Counting uses the same
+            # bank-resolved, strategy-applied chunk size the orchestrator chunks
+            # with, so the offsets match the chunk_index values it assigns.
+            from .retain import fact_extraction
+
+            sub_chunk_size = await self._resolve_retain_chunk_size(bank_id, request_context, strategy)
+            chunk_offsets: dict[str, int] = {}
+
             for i, (sub_batch, sub_origins) in enumerate(zip(sub_batches, origin_indices), 1):
                 # Checkpoint: abort if the operation was deleted (bank was deleted) between sub-batches.
                 if operation_id and not await self._check_op_alive(operation_id):
@@ -2805,6 +2820,14 @@ class MemoryEngine(MemoryEngineInterface):
                 logger.info(
                     f"Processing sub-batch {i}/{len(sub_batches)}: {len(sub_batch)} items, {sub_batch_tokens:,} tokens"
                 )
+
+                # Resolve the document this sub-batch writes to so we can offset
+                # its chunk_index past chunks already stored by earlier
+                # sub-batches of the same document. Only the oversized-single-item
+                # split shares a document_id across sub-batches; packed multi-item
+                # sub-batches carry distinct document_ids (offset stays 0).
+                sub_doc_id = document_id or (sub_batch[0].get("document_id") if len(sub_batch) == 1 else None)
+                sub_offset = chunk_offsets.get(sub_doc_id, 0) if sub_doc_id else 0
 
                 sub_results, sub_usage, sub_processed = await self._retain_batch_async_internal(
                     bank_id=bank_id,
@@ -2821,7 +2844,19 @@ class MemoryEngine(MemoryEngineInterface):
                     outbox_callback=outbox_callback if i == len(sub_batches) else None,
                     outbox_callback_factory=outbox_callback_factory if i == len(sub_batches) else None,
                     document_body_override=document_body_overrides[i - 1],
+                    chunk_index_offset=sub_offset,
                 )
+
+                # Advance the document's chunk_index cursor by the number of
+                # chunks this sub-batch produced (computed with the same chunk
+                # size the orchestrator uses), so the next sub-batch sharing the
+                # document continues the sequence.
+                if sub_doc_id:
+                    sub_chunk_count = sum(
+                        len(fact_extraction.chunk_text(item.get("content", "") or "", sub_chunk_size))
+                        for item in sub_batch
+                    )
+                    chunk_offsets[sub_doc_id] = sub_offset + sub_chunk_count
                 # sub_results aligns 1:1 with sub_batch items; map each
                 # back to its source input via origin_indices so callers
                 # iterating with ``zip(contents, results)`` still align.
@@ -2901,6 +2936,28 @@ class MemoryEngine(MemoryEngineInterface):
             return result, total_usage
         return result
 
+    async def _resolve_retain_chunk_size(
+        self,
+        bank_id: str,
+        request_context: "RequestContext",
+        strategy: str | None,
+    ) -> int:
+        """Resolve the effective ``retain_chunk_size`` for a bank.
+
+        Mirrors the bank-config + strategy resolution that
+        ``_retain_batch_async_internal`` applies before handing config to the
+        orchestrator, so chunk-count estimates used for per-document
+        chunk_index offsets match the chunk_index values the orchestrator
+        actually assigns.
+        """
+        from hindsight_api.config_resolver import apply_strategy
+
+        resolved_config = await self._config_resolver.resolve_full_config(bank_id, request_context)
+        effective_strategy = strategy or resolved_config.retain_default_strategy
+        if effective_strategy:
+            resolved_config = apply_strategy(resolved_config, effective_strategy)
+        return getattr(resolved_config, "retain_chunk_size", 3000)
+
     async def _retain_batch_async_internal(
         self,
         bank_id: str,
@@ -2915,6 +2972,7 @@ class MemoryEngine(MemoryEngineInterface):
         outbox_callback_factory: RetainOutboxCallbackFactory | None = None,
         strategy: str | None = None,
         document_body_override: str | None = None,
+        chunk_index_offset: int = 0,
     ) -> tuple[list[list[str]], "TokenUsage", int | None]:
         """
         Internal method for batch processing without chunking logic.
@@ -2979,6 +3037,7 @@ class MemoryEngine(MemoryEngineInterface):
                 outbox_callback_factory=outbox_callback_factory,
                 db_semaphore=self._put_semaphore,
                 document_body_override=document_body_override,
+                chunk_index_offset=chunk_index_offset,
             )
 
     def recall(
