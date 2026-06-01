@@ -89,30 +89,23 @@ async def phase_memory_service() -> bool:
     print(f"Expected bank: {APP_NAME}::{USER_ID}\n")
 
     session_a_id = f"sess-a-{uuid.uuid4().hex[:6]}"
-    await session_service.create_session(
-        app_name=APP_NAME, user_id=USER_ID, session_id=session_a_id
-    )
+    await session_service.create_session(app_name=APP_NAME, user_id=USER_ID, session_id=session_a_id)
     print(f"--- Session A ({session_a_id}) ---")
     reply = await run_turn(
         runner,
         session_a_id,
-        "Hi! My name is Ben and my favorite programming language is Rust. "
-        "Also, I have a dog named Pixel.",
+        "Hi! My name is Ben and my favorite programming language is Rust. Also, I have a dog named Pixel.",
     )
     print(f"Agent: {reply[:200]}\n")
 
     # Manually flush session to memory (Runner calls this on session end in
     # real lifecycle; InMemorySessionService skips it).
-    session_a = await session_service.get_session(
-        app_name=APP_NAME, user_id=USER_ID, session_id=session_a_id
-    )
+    session_a = await session_service.get_session(app_name=APP_NAME, user_id=USER_ID, session_id=session_a_id)
     await memory.add_session_to_memory(session_a)
     print(f"  -> session A retained ({len(session_a.events)} events)\n")
 
     session_b_id = f"sess-b-{uuid.uuid4().hex[:6]}"
-    await session_service.create_session(
-        app_name=APP_NAME, user_id=USER_ID, session_id=session_b_id
-    )
+    await session_service.create_session(app_name=APP_NAME, user_id=USER_ID, session_id=session_b_id)
     print(f"--- Session B ({session_b_id}) ---")
     reply = await run_turn(
         runner,
@@ -162,9 +155,7 @@ async def phase_tools() -> bool:
     print(f"Bank: {TOOLS_BANK_ID}\n")
 
     session_c_id = f"sess-c-{uuid.uuid4().hex[:6]}"
-    await session_service.create_session(
-        app_name=APP_NAME, user_id=USER_ID, session_id=session_c_id
-    )
+    await session_service.create_session(app_name=APP_NAME, user_id=USER_ID, session_id=session_c_id)
     print(f"--- Session C ({session_c_id}) ---")
     reply = await run_turn(
         runner,
@@ -178,15 +169,12 @@ async def phase_tools() -> bool:
     await asyncio.sleep(2)
 
     session_d_id = f"sess-d-{uuid.uuid4().hex[:6]}"
-    await session_service.create_session(
-        app_name=APP_NAME, user_id=USER_ID, session_id=session_d_id
-    )
+    await session_service.create_session(app_name=APP_NAME, user_id=USER_ID, session_id=session_d_id)
     print(f"--- Session D ({session_d_id}) ---")
     reply = await run_turn(
         runner,
         session_d_id,
-        "What car do I drive and what's my coffee order? "
-        "Use your recall tool.",
+        "What car do I drive and what's my coffee order? Use your recall tool.",
     )
     print(f"Agent: {reply[:400]}\n")
 
@@ -213,7 +201,7 @@ async def main() -> None:
     print("\n=== Summary ===")
     print(f"  Phase 1 (HindsightMemoryService): {'PASS' if p1 else 'FAIL'}")
     print(f"  Phase 2 (create_hindsight_tools): {'PASS' if p2 else 'FAIL'}")
-    print(f"\nBanks to inspect:")
+    print("\nBanks to inspect:")
     print(f"  Phase 1: {APP_NAME}::{USER_ID}")
     print(f"  Phase 2: {TOOLS_BANK_ID}")
     if not (p1 and p2):
