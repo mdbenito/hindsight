@@ -326,6 +326,49 @@ async def test_retain_creates_trace_rows_with_tokens(trace_api_client, bank_id):
 
 
 @pytest.mark.asyncio
+async def test_delta_reretain_binds_document_id(trace_api_client, bank_id):
+    """A delta re-retain (editing/appending a document) must tag its trace with
+    the document_id, so the document accrues one trace per retain — not just the
+    initial full retain. Regression: the delta path used a second extraction call
+    site that bypassed the document_id attribution, so edits were orphaned.
+    """
+    await trace_api_client.put(f"/v1/default/banks/{bank_id}", json={"name": "Trace Bank"})
+    document_id = "delta-doc-001"
+
+    # v1: a single self-contained chunk.
+    v1 = "Alice is a software engineer at Google. She works on search infrastructure."
+    resp = await trace_api_client.post(
+        f"/v1/default/banks/{bank_id}/memories",
+        json={"items": [{"content": v1, "context": "people", "document_id": document_id}]},
+    )
+    assert resp.status_code == 200
+    await asyncio.sleep(1.5)
+
+    # v2: original content preserved + a new paragraph. The unchanged first chunk
+    # forces the delta path (it needs ≥1 unchanged chunk), and the new chunk is
+    # extracted via the instrumented delta extraction call site.
+    v2 = v1 + "\n\nBob joined Google as a product manager in 2024. He previously worked at Meta."
+    resp = await trace_api_client.post(
+        f"/v1/default/banks/{bank_id}/memories",
+        json={"items": [{"content": v2, "context": "people", "document_id": document_id}]},
+    )
+    assert resp.status_code == 200
+    await asyncio.sleep(1.5)
+
+    # The document_id filter must now return both the full retain and the delta
+    # re-retain — i.e. ≥2 distinct retain trace_ids, every row tagged.
+    by_doc = (
+        await trace_api_client.get(
+            f"/v1/default/banks/{bank_id}/llm-requests",
+            params={"document_id": document_id, "operation": "retain"},
+        )
+    ).json()
+    assert all(it["metadata"].get("document_id") == document_id for it in by_doc["items"])
+    retain_traces = {it["trace_id"] for it in by_doc["items"]}
+    assert len(retain_traces) >= 2, f"expected full + delta retain bound to document, got {len(retain_traces)}"
+
+
+@pytest.mark.asyncio
 async def test_filter_by_status_and_operation(trace_api_client, bank_id):
     await trace_api_client.put(f"/v1/default/banks/{bank_id}", json={"name": "Trace Bank"})
     await trace_api_client.post(
