@@ -1501,12 +1501,13 @@ async def _find_related_observations(
             include_source_facts=True,  # Embed source facts so we avoid a separate DB fetch
             max_source_facts_tokens=config.consolidation_source_facts_max_tokens,
             max_source_facts_tokens_per_observation=config.consolidation_source_facts_max_tokens_per_observation,
-            # Rank by RRF, skipping the cross-encoder reranker: for consolidation we are
-            # looking for an existing near-identical observation to merge into, and the
-            # cross-encoder was observed to demote that twin far below the budget cutoff
-            # (semantic rank #1 -> reranked #37). RRF keeps strong lexical/semantic
-            # matches near the top so the LLM is shown the twin and UPDATEs it.
-            rerank=False,
+            # Round-robin interleave fusion (no cross-encoder): consolidation is looking
+            # for an existing near-identical observation to merge into. Both the
+            # cross-encoder (semantic #1 -> reranked #37) and RRF (semantic #1 -> outside
+            # the 512-token budget) were measured to bury that twin; interleave guarantees
+            # each retrieval arm's top hits a slot, so the semantic-#1 twin is always shown
+            # to the LLM, which then UPDATEs instead of creating a duplicate.
+            reranking="interleave",
             _quiet=True,  # Suppress logging
         )
     finally:
