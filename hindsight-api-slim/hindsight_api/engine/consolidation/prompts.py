@@ -37,6 +37,33 @@ _PROCESSING_RULES = """## PROCESSING RULES
 
 9. KEEP DISTINCT TOPICS DISTINCT: do not merge observations about different people, entities, or unrelated topics. Merging is for the same canonical fact recurring — not for related-but-distinct claims."""
 
+# Stable description of the input shape. For the cached split path this lives in
+# the system prefix (build_consolidation_system_prompt) so it is not re-sent on
+# every batch; the per-batch user message then carries only the actual data.
+_INPUT_FORMAT_NOTE = """## INPUT FORMAT
+
+Each request provides new facts and existing observations:
+- New facts: one per line, each prefixed with its `[uuid]`, followed by the fact text and optional temporal fields.
+- Existing observations: a JSON array pooled from recalls across the new facts. Each entry has:
+  - `id`: unique identifier — copy this exactly when issuing an UPDATE or DELETE
+  - `text`: the observation content
+  - `proof_count`: number of supporting memories
+  - `occurred_start` / `occurred_end`: temporal range of source facts
+  - `source_memories`: array of supporting facts with their text and dates"""
+
+# Per-batch data section for the cached split path — the stable format
+# explanation above is omitted here (it lives in the cached prefix); only the
+# variable facts/observations remain. Placeholders substituted at call time.
+_SPLIT_INPUT_SECTION = """## INPUT
+
+### New facts
+
+{facts_text}
+
+### Existing observations
+
+{observations_text}"""
+
 # Data section — format placeholders {facts_text} and {observations_text} are substituted at call time
 _INPUT_SECTION = """## INPUT
 
@@ -169,6 +196,7 @@ def build_consolidation_system_prompt(
         f"## MISSION\n\n{mission}\n\n"
         f"{_MISSION_PRIORITY_NOTE}\n\n"
         f"{_PROCESSING_RULES}\n\n"
+        f"{_INPUT_FORMAT_NOTE}\n\n"
         f"{_DECISION_GUIDE}\n\n"
         f"{_OUTPUT_SECTION}" + output_language_directive(llm_output_language)
     )
@@ -191,5 +219,7 @@ def build_consolidation_input(
     capacity_section = ""
     if observation_capacity_note:
         capacity_section = f"## CAPACITY CONSTRAINT\n\n{escape_for_prompt(observation_capacity_note)}\n\n"
-    template = capacity_section + _INPUT_SECTION
+    # _SPLIT_INPUT_SECTION omits the stable observation-format explanation (now in
+    # the cached system prefix) — only the variable facts/observations remain.
+    template = capacity_section + _SPLIT_INPUT_SECTION
     return template.format(facts_text=facts_text, observations_text=observations_text)

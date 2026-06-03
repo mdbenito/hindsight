@@ -3544,6 +3544,8 @@ def test_consolidation_prompt_split_is_cacheable_and_complete():
     assert "Track widgets." in sys1
     assert '{"creates"' in sys1
     assert "{{" not in sys1
+    # The stable observation-format boilerplate lives in the cached prefix.
+    assert "proof_count" in sys1
 
     user_a = build_consolidation_input(facts_text="[id-a] Fact A.", observations_text="[]")
     user_b = build_consolidation_input(facts_text="[id-b] Fact B.", observations_text="[]")
@@ -3551,6 +3553,8 @@ def test_consolidation_prompt_split_is_cacheable_and_complete():
     assert "Fact A." in user_a
     assert "Fact A." not in sys1
     assert user_a != user_b
+    # The format boilerplate is NOT re-sent per batch (it's in the cached prefix).
+    assert "proof_count" not in user_a
 
     # The capacity note is per-batch too — kept out of the cached prefix.
     capped = build_consolidation_input(
