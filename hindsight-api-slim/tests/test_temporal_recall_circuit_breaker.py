@@ -156,6 +156,58 @@ async def test_gate_at_exact_threshold_allows():
 
 
 @pytest.mark.asyncio
+async def test_explain_sql_references_every_param():
+    """Every value passed to ``conn.fetch`` for the EXPLAIN row-estimate must be
+    referenced by a ``$N`` placeholder in the SQL. asyncpg infers parameter
+    types from the prepared statement's usage; binding a value that the query
+    never references raises ``IndeterminateDatatypeError`` at prepare time and
+    silently breaks the gate (it fails open, but the estimate never runs).
+
+    This regression test caught a real production bug: the helper used to
+    inherit the caller's full params list (which included the query embedding
+    at ``$1`` and the similarity threshold at ``$6``) while the EXPLAIN SQL
+    only referenced ``$2-$5`` plus tags. Every recall logged ``temporal filter
+    row estimate failed; could not determine data type of parameter $1``.
+    """
+    import re
+
+    conn = _FakeConn(planner_row_estimate=10)
+    # Exercise every optional clause builder so any unreferenced bind in the
+    # tags / groups / created_range branches is caught too.
+    await retrieve_temporal_combined(
+        conn=conn,
+        query_emb_str="[0.1,0.2,0.3]",
+        bank_id="bank-1",
+        fact_types=["observation"],
+        start_date=datetime(2026, 6, 1, tzinfo=UTC),
+        end_date=datetime(2026, 6, 1, 23, 59, 59, tzinfo=UTC),
+        budget=10,
+        tags=["a", "b"],
+        tags_match="all",
+        created_after=datetime(2026, 5, 1, tzinfo=UTC),
+        created_before=datetime(2026, 6, 30, tzinfo=UTC),
+    )
+    # The first fetch is the EXPLAIN; verify its param layout.
+    explain_sql, explain_params = conn.fetch_calls[0]
+    assert "EXPLAIN" in explain_sql
+
+    # Every $N referenced in the SQL must have a corresponding bind in params.
+    referenced = {int(m) for m in re.findall(r"\$(\d+)", explain_sql)}
+    assert referenced, "EXPLAIN SQL must use at least one parameter"
+    max_ref = max(referenced)
+    assert max_ref <= len(explain_params), (
+        f"SQL references $1..${max_ref} but only {len(explain_params)} params were bound"
+    )
+    # Symmetric direction: every bound param must be referenced. An
+    # unreferenced position is the bug the production logs surfaced.
+    for i in range(1, len(explain_params) + 1):
+        assert i in referenced, (
+            f"param ${i}={explain_params[i - 1]!r} is bound but never referenced in EXPLAIN SQL — "
+            "asyncpg will raise IndeterminateDatatypeError at prepare time"
+        )
+
+
+@pytest.mark.asyncio
 async def test_gate_skipped_on_non_postgres_backend():
     """The EXPLAIN format used here is postgres-specific; the gate opts out
     on other backends and lets the temporal query proceed (Oracle's planner
