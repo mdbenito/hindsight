@@ -253,9 +253,10 @@ async def test_refreshes_after_ttl_margin(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_gemini_llm_returns_none_when_cache_disabled():
-    """The flag is off by default. ``get_or_create_cached_prefix`` returns
-    None without ever instantiating a cache manager. This is the
-    safety property: upgrade-and-do-nothing leaves behaviour unchanged."""
+    """A directly-constructed GeminiLLM (no prompt_cache_enabled kwarg) does not
+    cache: ``get_or_create_cached_prefix`` returns None without ever building a
+    cache manager. The server-level default-on flows in via the kwarg (resolved
+    from config in LLMProvider), not via this constructor default."""
     from hindsight_api.engine.providers.gemini_llm import GeminiLLM
 
     llm = GeminiLLM(
@@ -264,7 +265,7 @@ async def test_gemini_llm_returns_none_when_cache_disabled():
         base_url="",
         model="gemini-test",
     )
-    # Flag defaults False; even with a stable prefix the cache must stay disabled.
+    # Constructor default is off; even with a stable prefix the cache stays disabled.
     result = await llm.get_or_create_cached_prefix(
         system_instruction="A reasonably long system prompt " * 50,
         response_schema=None,
@@ -288,7 +289,7 @@ async def test_gemini_llm_uses_cache_when_enabled(monkeypatch):
         api_key="not-real-key",
         base_url="",
         model="gemini-test",
-        gemini_prompt_cache_enabled=True,
+        prompt_cache_enabled=True,
     )
 
     # Replace the SDK-shaped client with a fake whose caches.create returns

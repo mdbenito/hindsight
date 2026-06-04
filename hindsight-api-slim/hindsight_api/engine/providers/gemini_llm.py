@@ -71,10 +71,12 @@ class GeminiLLM(LLMInterface):
         self._safety_settings: list | None = kwargs.get("gemini_safety_settings")
 
         # Context-cache manager. Lazy-initialized on first cache lookup so
-        # nothing happens for providers/models/workloads that never opt in.
-        # Off by default; callers opt in via ``get_or_create_cached_prefix``.
+        # nothing happens for models/workloads that never reach it. The instance
+        # default here is off (a directly-constructed GeminiLLM doesn't cache); the
+        # server-level default is on and flows in via the prompt_cache_enabled kwarg
+        # resolved from config in LLMProvider.
         self._cache_manager: Any | None = None
-        self._prompt_cache_enabled: bool = bool(kwargs.get("gemini_prompt_cache_enabled", False))
+        self._prompt_cache_enabled: bool = bool(kwargs.get("prompt_cache_enabled", False))
 
         if self._is_vertexai:
             self._init_vertexai(**kwargs)

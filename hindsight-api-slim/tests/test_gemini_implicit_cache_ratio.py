@@ -107,15 +107,18 @@ async def _gemini_engine(memory_no_llm_verify: MemoryEngine) -> MemoryEngine:
     from hindsight_api.config import clear_config_cache
 
     model = os.getenv("HINDSIGHT_GEMINI_EVAL_MODEL", "gemini-2.5-flash")
-    if _EXPLICIT_CACHE:
-        os.environ["HINDSIGHT_API_LLM_GEMINI_PROMPT_CACHE_ENABLED"] = "true"
-        clear_config_cache()  # so the bank-config resolver re-reads the flag from env
+    # Prompt caching is on by default now, so the implicit-baseline run must
+    # explicitly DISABLE it (not just leave it unset) to measure Gemini's own
+    # implicit caching. Set the flag in both modes and clear the config cache so
+    # the per-bank resolver re-reads it.
+    os.environ["HINDSIGHT_API_LLM_PROMPT_CACHE_ENABLED"] = "true" if _EXPLICIT_CACHE else "false"
+    clear_config_cache()
     cfg = LLMConfig(
         provider="gemini",
         api_key=_GEMINI_API_KEY or "",
         base_url="",
         model=model,
-        gemini_prompt_cache_enabled=_EXPLICIT_CACHE,
+        prompt_cache_enabled=_EXPLICIT_CACHE,
     )
     memory_no_llm_verify._llm_config = cfg
     memory_no_llm_verify._retain_llm_config = cfg
