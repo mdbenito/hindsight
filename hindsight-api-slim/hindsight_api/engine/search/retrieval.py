@@ -296,10 +296,11 @@ async def _estimate_temporal_filter_rows(
     fact_types: list[str],
     start_date: datetime,
     end_date: datetime,
-    tags_clause: str,
-    groups_clause: str,
-    created_range_clause: str,
-    params_for_filter: list,
+    tags: list[str] | None = None,
+    tags_match: TagsMatch = "any",
+    tag_groups: list[TagGroup] | None = None,
+    created_after: datetime | None = None,
+    created_before: datetime | None = None,
 ) -> int | None:
     """Ask the planner how many rows the temporal Phase 1 filter would match.
 
@@ -318,35 +319,56 @@ async def _estimate_temporal_filter_rows(
     if backend != "postgresql":
         return None
 
-    # Reuse the exact same WHERE clause as the real query so the planner
-    # estimate matches the filter's actual selectivity. The params layout
-    # mirrors retrieve_temporal_combined: $2=bank_id, $3=fact_types, $4=start,
-    # $5=end, then tags/groups/created_range at the appropriate offsets.
-    # We don't reference $1 ($6 etc.) in the estimate query since they're
-    # embedding/threshold params that don't influence the filter row count.
+    # Build the estimate query's own param list and clauses. We deliberately do
+    # NOT inherit the caller's params (which include the query embedding and
+    # semantic threshold at $1/$6) — asyncpg's prepare-time type inference
+    # rejects EXPLAIN statements that bind unreferenced parameters, so the
+    # estimate query keeps a self-contained layout starting at $1.
+    estimate_params: list[Any] = [bank_id, fact_types, start_date, end_date]
+    next_idx = 5
+
+    e_tags_clause = build_tags_where_clause_simple(tags, next_idx, match=tags_match)
+    if tags:
+        estimate_params.append(tags)
+        next_idx += 1
+
+    e_groups_clause, e_groups_params, _ = build_tag_groups_where_clause(tag_groups, next_idx)
+    estimate_params.extend(e_groups_params)
+    next_idx += len(e_groups_params)
+
+    e_created_range_clause = ""
+    if created_after is not None:
+        estimate_params.append(created_after)
+        e_created_range_clause += f" AND updated_at > ${next_idx}"
+        next_idx += 1
+    if created_before is not None:
+        estimate_params.append(created_before)
+        e_created_range_clause += f" AND updated_at < ${next_idx}"
+        next_idx += 1
+
     explain_sql = f"""
         EXPLAIN (FORMAT JSON)
         SELECT 1
         FROM {fq_table("memory_units")}
-        WHERE bank_id = $2
-          AND fact_type = ANY($3)
+        WHERE bank_id = $1
+          AND fact_type = ANY($2)
           AND embedding IS NOT NULL
           AND (
               (occurred_start IS NOT NULL AND occurred_end IS NOT NULL
-               AND occurred_start <= $5 AND occurred_end >= $4)
+               AND occurred_start <= $4 AND occurred_end >= $3)
               OR
-              (mentioned_at IS NOT NULL AND mentioned_at BETWEEN $4 AND $5)
+              (mentioned_at IS NOT NULL AND mentioned_at BETWEEN $3 AND $4)
               OR
-              (occurred_start IS NOT NULL AND occurred_start BETWEEN $4 AND $5)
+              (occurred_start IS NOT NULL AND occurred_start BETWEEN $3 AND $4)
               OR
-              (occurred_end IS NOT NULL AND occurred_end BETWEEN $4 AND $5)
+              (occurred_end IS NOT NULL AND occurred_end BETWEEN $3 AND $4)
           )
-          {tags_clause}
-          {groups_clause}
-          {created_range_clause}
+          {e_tags_clause}
+          {e_groups_clause}
+          {e_created_range_clause}
     """
     try:
-        rows = await conn.fetch(explain_sql, *params_for_filter)
+        rows = await conn.fetch(explain_sql, *estimate_params)
     except Exception:
         # Any failure (permission, parser drift, dialect quirk) should fail
         # open — don't block legitimate queries because the safety net broke.
@@ -453,10 +475,11 @@ async def retrieve_temporal_combined(
         fact_types=fact_types,
         start_date=start_date,
         end_date=end_date,
-        tags_clause=tags_clause,
-        groups_clause=groups_clause,
-        created_range_clause=created_range_clause,
-        params_for_filter=params,
+        tags=tags,
+        tags_match=tags_match,
+        tag_groups=tag_groups,
+        created_after=created_after,
+        created_before=created_before,
     )
     if estimated_rows is not None and estimated_rows > TEMPORAL_RECALL_MAX_ESTIMATED_ROWS:
         logger.warning(
