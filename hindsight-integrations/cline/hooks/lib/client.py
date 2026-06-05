@@ -8,7 +8,7 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Optional
+from typing import Any, Optional
 
 from .config import find_settings_path
 
@@ -49,7 +49,7 @@ class HindsightClient:
         self.api_url = _validate_api_url(api_url)
         self.api_token = api_token
 
-    def _headers(self) -> dict:
+    def _headers(self) -> dict[str, str]:
         headers = {
             "Content-Type": "application/json",
             "User-Agent": USER_AGENT,
@@ -58,7 +58,10 @@ class HindsightClient:
             headers["Authorization"] = f"Bearer {self.api_token}"
         return headers
 
-    def _request(self, method: str, path: str, body: Optional[dict] = None, timeout: int = DEFAULT_TIMEOUT) -> dict:
+    def _request(
+        self, method: str, path: str, body: Optional[dict[str, Any]] = None, timeout: int = DEFAULT_TIMEOUT
+    ) -> dict[str, Any]:
+        # Returns the server's parsed JSON response — an open-ended payload, so a dict is correct here.
         url = f"{self.api_url}{path}"
         data = json.dumps(body).encode() if body else None
         req = urllib.request.Request(url, data=data, headers=self._headers(), method=method)
@@ -91,7 +94,7 @@ class HindsightClient:
         budget: str = "mid",
         types: Optional[list] = None,
         timeout: int = 10,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Recall memories from a bank. Returns the raw API response dict with 'results'."""
         path = f"/v1/default/banks/{urllib.parse.quote(bank_id, safe='')}/memories/recall"
         body = {"query": query, "max_tokens": max_tokens}
@@ -110,7 +113,7 @@ class HindsightClient:
         metadata: Optional[dict] = None,
         tags: Optional[list] = None,
         timeout: int = 15,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Retain content into a bank's memory.
 
         Posts with async=true so the server processes in the background. The
@@ -131,7 +134,7 @@ class HindsightClient:
 
     def set_bank_mission(
         self, bank_id: str, mission: str, retain_mission: Optional[str] = None, timeout: int = 15
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Set the mission/persona for a bank via PATCH /banks/{id}/config."""
         path = f"/v1/default/banks/{urllib.parse.quote(bank_id, safe='')}/config"
         updates = {"reflect_mission": mission}

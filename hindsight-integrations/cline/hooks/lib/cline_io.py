@@ -12,9 +12,10 @@ than passing raw dicts around.
 import json
 import sys
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 from .client import HindsightClient
+from .config import HindsightClineConfig
 
 RECALL_MIN_CHARS = 5
 
@@ -31,7 +32,7 @@ class HookInput:
     model_slug: str = ""
 
 
-def parse_hook_input(raw: dict) -> HookInput:
+def parse_hook_input(raw: dict[str, Any]) -> HookInput:
     """Build a HookInput from the raw stdin JSON, tolerating missing fields."""
     if not isinstance(raw, dict):
         raw = {}
@@ -78,17 +79,17 @@ def emit(cancel: bool = False, context_modification: str = "", error_message: st
     )
 
 
-def resolve_api_url(config: dict) -> Optional[str]:
+def resolve_api_url(config: HindsightClineConfig) -> Optional[str]:
     """Resolve a reachable Hindsight server, or None.
 
     Lean v1: use the configured external URL, else a Hindsight server already
     running locally. We never auto-start a daemon — if nothing is reachable
     the hooks degrade to no-ops.
     """
-    url = config.get("hindsightApiUrl")
+    url = config.hindsight_api_url
     if url:
         return str(url).rstrip("/")
-    port = config.get("apiPort", 9077)
+    port = config.api_port
     local = f"http://localhost:{port}"
     try:
         if HindsightClient(local).health_check(timeout=2):

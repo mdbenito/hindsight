@@ -13,8 +13,8 @@ HOOKS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "hooks
 if HOOKS_DIR not in sys.path:
     sys.path.insert(0, HOOKS_DIR)
 
-from lib import config as config_mod  # noqa: E402
 from lib.cline_io import HookInput  # noqa: E402
+from lib.config import HindsightClineConfig, camel_to_snake  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -28,11 +28,15 @@ def isolated_home(tmp_path, monkeypatch):
     return tmp_path
 
 
-def base_config(**overrides):
-    """A config dict with a fixed external API URL and no mission PATCH by default."""
-    cfg = dict(config_mod.DEFAULTS)
-    cfg.update({"hindsightApiUrl": "https://api.test", "bankMission": "", "retainMission": None})
-    cfg.update(overrides)
+def base_config(**overrides) -> HindsightClineConfig:
+    """A config with a fixed external API URL and no mission PATCH by default.
+
+    Overrides may be passed in camelCase (the settings.json form) for parity
+    with how the plugin is configured; they're mapped to the dataclass fields.
+    """
+    cfg = HindsightClineConfig(hindsight_api_url="https://api.test", bank_mission="", retain_mission=None)
+    for key, value in overrides.items():
+        setattr(cfg, camel_to_snake(key), value)
     return cfg
 
 

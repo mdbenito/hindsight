@@ -1,78 +1,96 @@
-"""Configuration management for the Hindsight Cline integration.
+"""Configuration for the Hindsight Cline integration.
 
-Loads settings from settings.json (plugin defaults) merged with a user
-config file and environment variable overrides. Lean v1 schema — no daemon
-or chunked-retain keys (see the integration README for the full rationale).
+Settings are a typed ``HindsightClineConfig`` (not a raw dict) built from
+built-in defaults, then merged with the plugin ``settings.json``, a user
+config file, and environment variable overrides. The on-disk/env format stays
+camelCase (``autoRecall``, ``bankId``, …); load converts those keys to the
+dataclass's snake_case fields. Lean v1 schema — no daemon or chunked-retain
+keys (see the integration README for the rationale).
 """
 
 import json
 import os
+import re
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
-DEFAULTS = {
+
+@dataclass
+class HindsightClineConfig:
+    """Typed plugin configuration. Field names are the snake_case form of the
+    camelCase keys used in settings.json / env vars."""
+
     # Recall
-    "autoRecall": True,
-    "recallBudget": "mid",
-    "recallMaxTokens": 1024,
-    "recallTimeout": 10,
-    "recallTypes": ["world", "experience"],
-    "recallContextTurns": 1,
-    "recallMaxQueryChars": 800,
-    "recallPromptPreamble": (
+    auto_recall: bool = True
+    recall_budget: str = "mid"
+    recall_max_tokens: int = 1024
+    recall_timeout: int = 10
+    recall_types: list[str] = field(default_factory=lambda: ["world", "experience"])
+    recall_context_turns: int = 1
+    recall_max_query_chars: int = 800
+    recall_prompt_preamble: str = (
         "Relevant memories from past conversations (prioritize recent when "
         "conflicting). Only use memories that are directly useful to continue "
         "this task; ignore the rest:"
-    ),
+    )
     # Retain
-    "autoRetain": True,
-    "retainContext": "cline",
-    "retainTags": ["{task_id}"],
-    "retainMetadata": {},
-    "retainTimeout": 15,
+    auto_retain: bool = True
+    retain_context: str = "cline"
+    retain_tags: list[str] = field(default_factory=lambda: ["{task_id}"])
+    # User-defined, open-ended key/values → genuinely dynamic, so a dict is correct here.
+    retain_metadata: dict[str, Any] = field(default_factory=dict)
+    retain_timeout: int = 15
     # Connection
-    "hindsightApiUrl": None,
-    "hindsightApiToken": None,
-    "apiPort": 9077,
+    hindsight_api_url: Optional[str] = None
+    hindsight_api_token: Optional[str] = None
+    api_port: int = 9077
     # Bank
-    "bankId": "cline",
-    "bankIdPrefix": "",
-    "dynamicBankId": False,
-    "dynamicBankGranularity": ["agent", "project"],
-    "bankMission": (
+    bank_id: str = "cline"
+    bank_id_prefix: str = ""
+    dynamic_bank_id: bool = False
+    dynamic_bank_granularity: list[str] = field(default_factory=lambda: ["agent", "project"])
+    bank_mission: str = (
         "You are a Cline AI coding assistant. Focus on technical decisions, "
         "code changes, debugging sessions, architectural choices, and project "
         "context relevant to the user's work."
-    ),
-    "retainMission": (
+    )
+    retain_mission: Optional[str] = (
         "Extract technical decisions, code patterns, debugging solutions, user "
         "preferences, project context, and architectural choices. Ignore "
         "routine greetings and transient operational details."
-    ),
-    "agentName": "cline",
+    )
+    agent_name: str = "cline"
     # Misc
-    "debug": False,
-}
+    debug: bool = False
 
-# Map env var names to config keys and their types.
-ENV_OVERRIDES = {
-    "HINDSIGHT_API_URL": ("hindsightApiUrl", str),
-    "HINDSIGHT_API_TOKEN": ("hindsightApiToken", str),
-    "HINDSIGHT_BANK_ID": ("bankId", str),
-    "HINDSIGHT_AGENT_NAME": ("agentName", str),
-    "HINDSIGHT_AUTO_RECALL": ("autoRecall", bool),
-    "HINDSIGHT_AUTO_RETAIN": ("autoRetain", bool),
-    "HINDSIGHT_RECALL_BUDGET": ("recallBudget", str),
-    "HINDSIGHT_RECALL_MAX_TOKENS": ("recallMaxTokens", int),
-    "HINDSIGHT_RECALL_TIMEOUT": ("recallTimeout", int),
-    "HINDSIGHT_RECALL_MAX_QUERY_CHARS": ("recallMaxQueryChars", int),
-    "HINDSIGHT_RECALL_CONTEXT_TURNS": ("recallContextTurns", int),
-    "HINDSIGHT_API_PORT": ("apiPort", int),
-    "HINDSIGHT_DYNAMIC_BANK_ID": ("dynamicBankId", bool),
-    "HINDSIGHT_BANK_MISSION": ("bankMission", str),
+
+# Map env var names to dataclass fields and their types.
+ENV_OVERRIDES: dict[str, tuple[str, type]] = {
+    "HINDSIGHT_API_URL": ("hindsight_api_url", str),
+    "HINDSIGHT_API_TOKEN": ("hindsight_api_token", str),
+    "HINDSIGHT_BANK_ID": ("bank_id", str),
+    "HINDSIGHT_AGENT_NAME": ("agent_name", str),
+    "HINDSIGHT_AUTO_RECALL": ("auto_recall", bool),
+    "HINDSIGHT_AUTO_RETAIN": ("auto_retain", bool),
+    "HINDSIGHT_RECALL_BUDGET": ("recall_budget", str),
+    "HINDSIGHT_RECALL_MAX_TOKENS": ("recall_max_tokens", int),
+    "HINDSIGHT_RECALL_TIMEOUT": ("recall_timeout", int),
+    "HINDSIGHT_RECALL_MAX_QUERY_CHARS": ("recall_max_query_chars", int),
+    "HINDSIGHT_RECALL_CONTEXT_TURNS": ("recall_context_turns", int),
+    "HINDSIGHT_API_PORT": ("api_port", int),
+    "HINDSIGHT_DYNAMIC_BANK_ID": ("dynamic_bank_id", bool),
+    "HINDSIGHT_BANK_MISSION": ("bank_mission", str),
     "HINDSIGHT_DEBUG": ("debug", bool),
 }
+
+_VALID_FIELDS = {f for f in HindsightClineConfig.__dataclass_fields__}
+
+
+def camel_to_snake(name: str) -> str:
+    """Convert a camelCase settings key to a snake_case dataclass field."""
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
 
 
 def find_settings_path() -> Optional[Path]:
@@ -91,7 +109,7 @@ def find_settings_path() -> Optional[Path]:
     return None
 
 
-def _cast_env(value: str, typ):
+def _cast_env(value: str, typ: type) -> Any:
     """Cast an environment-variable string to the target type; None on failure."""
     try:
         if typ is bool:
@@ -103,47 +121,51 @@ def _cast_env(value: str, typ):
         return None
 
 
-def _load_settings_file(path: str, config: dict) -> None:
-    """Merge a settings.json file into config in-place. Silently skips if missing."""
+def _merge_settings_file(path: str, config: HindsightClineConfig) -> None:
+    """Merge a camelCase settings.json into config in place. Silently skips if missing."""
     if not path or not os.path.exists(path):
         return
     try:
         with open(path) as f:
             file_config = json.load(f)
-        config.update({k: v for k, v in file_config.items() if v is not None})
     except (json.JSONDecodeError, OSError) as e:
         debug_log(config, f"Failed to load {path}: {e}")
+        return
+    for key, value in file_config.items():
+        field_name = camel_to_snake(key)
+        if value is not None and field_name in _VALID_FIELDS:
+            setattr(config, field_name, value)
 
 
-def load_config() -> dict:
+def load_config() -> HindsightClineConfig:
     """Load plugin configuration.
 
     Loading order (later entries win):
-      1. Built-in defaults
+      1. Built-in defaults (the dataclass defaults)
       2. Plugin settings.json (found via find_settings_path)
       3. User config (~/.hindsight/cline.json) — stable across updates
       4. Environment variable overrides
     """
-    config = dict(DEFAULTS)
+    config = HindsightClineConfig()
 
     settings_path = find_settings_path()
     if settings_path is not None:
-        _load_settings_file(str(settings_path), config)
+        _merge_settings_file(str(settings_path), config)
 
     user_config_path = os.path.join(os.path.expanduser("~"), ".hindsight", "cline.json")
-    _load_settings_file(user_config_path, config)
+    _merge_settings_file(user_config_path, config)
 
-    for env_name, (key, typ) in ENV_OVERRIDES.items():
+    for env_name, (field_name, typ) in ENV_OVERRIDES.items():
         val = os.environ.get(env_name)
         if val is not None:
             cast_val = _cast_env(val, typ)
             if cast_val is not None:
-                config[key] = cast_val
+                setattr(config, field_name, cast_val)
 
     return config
 
 
-def debug_log(config: dict, *args):
+def debug_log(config: HindsightClineConfig, *args: Any) -> None:
     """Log to stderr if debug mode is enabled."""
-    if config.get("debug"):
+    if config.debug:
         print("[Hindsight]", *args, file=sys.stderr)

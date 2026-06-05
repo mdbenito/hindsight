@@ -7,11 +7,12 @@ tests exercise.
 """
 
 import os
+from collections.abc import Callable
 
 from . import bank, cline_io, content
 from .client import HindsightClient
 from .cline_io import RECALL_MIN_CHARS, HookInput
-from .config import debug_log, load_config
+from .config import HindsightClineConfig, debug_log, load_config
 
 
 def _project_name(hook: HookInput) -> str:
@@ -30,27 +31,27 @@ def _render(template: str, hook: HookInput, status: str) -> str:
     )
 
 
-def _recall_context(hook: HookInput, config: dict, query: str) -> str:
+def _recall_context(hook: HookInput, config: HindsightClineConfig, query: str) -> str:
     """Recall memories for `query` and render the injectable context block."""
     api_url = cline_io.resolve_api_url(config)
     if not api_url:
         return ""
-    client = HindsightClient(api_url, config.get("hindsightApiToken"))
+    client = HindsightClient(api_url, config.hindsight_api_token)
     bank_id = bank.derive_bank_id(hook, config)
     bank.ensure_bank_mission(client, bank_id, config, debug_fn=lambda *a: debug_log(config, *a))
     resp = client.recall(
         bank_id,
         query,
-        max_tokens=config.get("recallMaxTokens", 1024),
-        budget=config.get("recallBudget", "mid"),
-        types=config.get("recallTypes"),
-        timeout=config.get("recallTimeout", 10),
+        max_tokens=config.recall_max_tokens,
+        budget=config.recall_budget,
+        types=config.recall_types,
+        timeout=config.recall_timeout,
     )
     results = resp.get("results", []) if isinstance(resp, dict) else []
     memories = content.format_memories(results)
     if not memories:
         return ""
-    preamble = config.get("recallPromptPreamble", "")
+    preamble = config.recall_prompt_preamble
     return (
         "<hindsight_memories>\n"
         f"{preamble}\n"
@@ -60,23 +61,23 @@ def _recall_context(hook: HookInput, config: dict, query: str) -> str:
     )
 
 
-def handle_user_prompt_submit(hook: HookInput, config: dict) -> str:
+def handle_user_prompt_submit(hook: HookInput, config: HindsightClineConfig) -> str:
     """Accumulate the prompt (for retain) and recall relevant memories."""
-    if config.get("autoRetain"):
+    if config.auto_retain:
         content.append_turn(hook.task_id, "user", hook.prompt)
-    if not config.get("autoRecall") or len(hook.prompt.strip()) < RECALL_MIN_CHARS:
+    if not config.auto_recall or len(hook.prompt.strip()) < RECALL_MIN_CHARS:
         return ""
     messages = content.read_transcript(hook.task_id)
-    query = content.compose_recall_query(hook.prompt, messages, config.get("recallContextTurns", 1))
-    query = content.truncate_recall_query(query, hook.prompt, config.get("recallMaxQueryChars", 800))
+    query = content.compose_recall_query(hook.prompt, messages, config.recall_context_turns)
+    query = content.truncate_recall_query(query, hook.prompt, config.recall_max_query_chars)
     return _recall_context(hook, config, query)
 
 
-def handle_task_start(hook: HookInput, config: dict) -> str:
+def handle_task_start(hook: HookInput, config: HindsightClineConfig) -> str:
     """Seed the transcript with the task description and recall kickoff context."""
-    if config.get("autoRetain") and hook.task:
+    if config.auto_retain and hook.task:
         content.append_turn(hook.task_id, "user", hook.task)
-    if not config.get("autoRecall"):
+    if not config.auto_recall:
         return ""
     query = (hook.task or "").strip()
     if len(query) < RECALL_MIN_CHARS:
@@ -84,9 +85,9 @@ def handle_task_start(hook: HookInput, config: dict) -> str:
     return _recall_context(hook, config, query)
 
 
-def handle_retain(hook: HookInput, config: dict, status: str) -> None:
+def handle_retain(hook: HookInput, config: HindsightClineConfig, status: str) -> None:
     """Retain the accumulated task transcript, then clear it."""
-    if not config.get("autoRetain"):
+    if not config.auto_retain:
         return
     # The completion hook's `task` field carries the final summary — record it.
     if hook.task:
@@ -98,23 +99,23 @@ def handle_retain(hook: HookInput, config: dict, status: str) -> None:
     api_url = cline_io.resolve_api_url(config)
     if not api_url:
         return
-    client = HindsightClient(api_url, config.get("hindsightApiToken"))
+    client = HindsightClient(api_url, config.hindsight_api_token)
     bank_id = bank.derive_bank_id(hook, config)
     bank.ensure_bank_mission(client, bank_id, config, debug_fn=lambda *a: debug_log(config, *a))
 
     metadata = {"task_id": hook.task_id, "project": _project_name(hook), "status": status}
-    for k, v in (config.get("retainMetadata") or {}).items():
+    for k, v in config.retain_metadata.items():
         metadata[k] = _render(v, hook, status) if isinstance(v, str) else v
-    tags = [_render(t, hook, status) for t in (config.get("retainTags") or [])]
+    tags = [_render(t, hook, status) for t in config.retain_tags]
 
     client.retain(
         bank_id,
         transcript,
         document_id=hook.task_id or "cline-task",
-        context=config.get("retainContext", "cline"),
+        context=config.retain_context,
         metadata=metadata,
         tags=tags,
-        timeout=config.get("retainTimeout", 15),
+        timeout=config.retain_timeout,
     )
     content.clear_transcript(hook.task_id)
 
@@ -122,7 +123,7 @@ def handle_retain(hook: HookInput, config: dict, status: str) -> None:
 # ── Entrypoints (called by the hook scripts) ─────────────────────────────────
 
 
-def _run_recall(handler) -> None:
+def _run_recall(handler: Callable[[HookInput, HindsightClineConfig], str]) -> None:
     config = load_config()
     hook = cline_io.read_hook_input()
     try:

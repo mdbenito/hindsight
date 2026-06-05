@@ -9,27 +9,31 @@ Cline context dimensions:
 
 import os
 import sys
+from collections.abc import Callable
+from typing import Optional
 
+from .client import HindsightClient
 from .cline_io import HookInput
+from .config import HindsightClineConfig
 from .state import read_state, write_state
 
 DEFAULT_BANK_NAME = "cline"
 VALID_FIELDS = {"agent", "project", "session", "user"}
 
 
-def derive_bank_id(hook: HookInput, config: dict) -> str:
+def derive_bank_id(hook: HookInput, config: HindsightClineConfig) -> str:
     """Derive a bank ID from hook context and config.
 
     Static (default): the configured bankId. Dynamic: granularity fields
     joined by '::'.
     """
-    prefix = config.get("bankIdPrefix", "")
+    prefix = config.bank_id_prefix
 
-    if not config.get("dynamicBankId", False):
-        base = config.get("bankId") or DEFAULT_BANK_NAME
+    if not config.dynamic_bank_id:
+        base = config.bank_id or DEFAULT_BANK_NAME
         return f"{prefix}-{base}" if prefix else base
 
-    fields = config.get("dynamicBankGranularity")
+    fields = config.dynamic_bank_granularity
     if not fields or not isinstance(fields, list):
         fields = ["agent", "project"]
 
@@ -42,7 +46,7 @@ def derive_bank_id(hook: HookInput, config: dict) -> str:
             )
 
     workspace = hook.workspace_roots[0] if hook.workspace_roots else ""
-    agent_name = config.get("agentName", "cline")
+    agent_name = config.agent_name or "cline"
     user_id = os.environ.get("HINDSIGHT_USER_ID", "")
 
     field_map = {
@@ -57,9 +61,14 @@ def derive_bank_id(hook: HookInput, config: dict) -> str:
     return f"{prefix}-{base_bank_id}" if prefix else base_bank_id
 
 
-def ensure_bank_mission(client, bank_id: str, config: dict, debug_fn=None) -> None:
+def ensure_bank_mission(
+    client: HindsightClient,
+    bank_id: str,
+    config: HindsightClineConfig,
+    debug_fn: Optional[Callable[..., None]] = None,
+) -> None:
     """Set the bank mission on first use; skip if already set (tracked in state)."""
-    mission = config.get("bankMission", "")
+    mission = config.bank_mission
     if not mission or not mission.strip():
         return
 
@@ -68,7 +77,7 @@ def ensure_bank_mission(client, bank_id: str, config: dict, debug_fn=None) -> No
         return
 
     try:
-        retain_mission = config.get("retainMission")
+        retain_mission = config.retain_mission
         client.set_bank_mission(bank_id, mission, retain_mission=retain_mission, timeout=10)
         missions_set[bank_id] = True
         if len(missions_set) > 10000:
