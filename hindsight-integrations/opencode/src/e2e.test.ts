@@ -45,9 +45,7 @@ describeLive("live: OpenCode plugin against Hindsight", () => {
   // retain/recall/deleteBank calls need the same token the plugin reads from
   // HINDSIGHT_API_TOKEN — otherwise they 401 even when the plugin path is fine.
   const TOKEN = process.env.HINDSIGHT_API_TOKEN;
-  const client = new HindsightClient(
-    TOKEN ? { baseUrl: URL, apiKey: TOKEN } : { baseUrl: URL }
-  );
+  const client = new HindsightClient(TOKEN ? { baseUrl: URL, apiKey: TOKEN } : { baseUrl: URL });
 
   afterAll(async () => {
     try {
