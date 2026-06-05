@@ -196,9 +196,7 @@ def main():
     # day Cursor fixes the bug — no protocol change required.
     if workspace_root and config.get("useRulesFileFallback", True):
         rule_content = format_rule_content(memories_formatted, preamble, current_time)
-        wrote = write_session_rules(
-            workspace_root, rule_content, debug_fn=lambda m: debug_log(config, m)
-        )
+        wrote = write_session_rules(workspace_root, rule_content, debug_fn=lambda m: debug_log(config, m))
         if wrote and config.get("appendToGitignore", True):
             ensure_gitignored(workspace_root, debug_fn=lambda m: debug_log(config, m))
 

@@ -106,17 +106,13 @@ def get_api_url(config: dict, debug_fn=None, allow_daemon_start: bool = False) -
     # Mode 3: opt-in auto-managed daemon
     if config.get("useLocalDaemon", False) and allow_daemon_start:
         if debug_fn:
-            debug_fn(
-                f"useLocalDaemon=True, no server on port {port} — starting daemon"
-            )
+            debug_fn(f"useLocalDaemon=True, no server on port {port} — starting daemon")
         try:
             _ensure_daemon_running(config, port, debug_fn)
             return base_url
         except Exception as e:
             if debug_fn:
-                debug_fn(
-                    f"Daemon start failed ({e}); falling back to {DEFAULT_HINDSIGHT_API_URL}"
-                )
+                debug_fn(f"Daemon start failed ({e}); falling back to {DEFAULT_HINDSIGHT_API_URL}")
             # Fall through to default-URL fallback rather than raising —
             # the plugin should keep working even if the local daemon path
             # is unavailable.

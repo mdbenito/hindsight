@@ -277,8 +277,11 @@ def main():
         )
         debug_log(config, f"Retain response: {json.dumps(response)[:200]}")
         _write_retain_status(
-            "success", bank_id=bank_id, document_id=document_id,
-            message_count=message_count, transcript_chars=len(transcript),
+            "success",
+            bank_id=bank_id,
+            document_id=document_id,
+            message_count=message_count,
+            transcript_chars=len(transcript),
         )
     except Exception as e:
         print(f"[Hindsight] Retain failed: {e}", file=sys.stderr)
