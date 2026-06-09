@@ -10,11 +10,24 @@ unaffected because it reads from memory_units, not original_text.
 import os
 from datetime import datetime, timezone
 
+import httpx
 import pytest
+import pytest_asyncio
 
 from hindsight_api import config as config_module
+from hindsight_api.api import create_app
 from hindsight_api.engine.memory_engine import Budget
 from hindsight_api.engine.reflect.tools_schema import get_reflect_tools
+
+
+@pytest_asyncio.fixture
+async def api_client(memory):
+    """Async HTTP client against the FastAPI app (exercises response-model validation)."""
+    app = create_app(memory, initialize_memory=False)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client
+
 
 LONG_CONTENT = """
 Alice Johnson is a senior software engineer at Acme Corp. She specializes in
@@ -140,6 +153,42 @@ async def test_append_mode_rejected_in_privacy_mode(memory, request_context, sto
             ],
             request_context=request_context,
         )
+
+
+@pytest.mark.asyncio
+async def test_get_document_endpoint_returns_null_text(
+    api_client, memory, request_context, store_document_text_disabled
+):
+    """GET document must return 200 with null original_text (not fail response validation).
+
+    The DocumentResponse model declares original_text as optional; a non-optional
+    str would raise ResponseValidationError -> HTTP 500 when the text is NULL.
+    """
+    bank_id = f"test_get_doc_privacy_{datetime.now(timezone.utc).timestamp()}"
+    document_id = "doc-http-privacy"
+
+    try:
+        retain = await api_client.post(
+            f"/v1/default/banks/{bank_id}/memories",
+            json={"items": [{"content": "Alice works at Acme Corp.", "document_id": document_id}]},
+        )
+        assert retain.status_code == 200, retain.text
+
+        resp = await api_client.get(f"/v1/default/banks/{bank_id}/documents/{document_id}")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["original_text"] is None, "Raw text must be null in privacy mode"
+        assert body["memory_unit_count"] > 0
+
+        # Append to the same document is rejected as a client error (400), not a 500.
+        append = await api_client.post(
+            f"/v1/default/banks/{bank_id}/memories",
+            json={"items": [{"content": "More text.", "document_id": document_id, "update_mode": "append"}]},
+        )
+        assert append.status_code == 400, append.text
+        assert "append" in append.json()["detail"]
+    finally:
+        await memory.delete_bank(bank_id, request_context=request_context)
 
 
 def test_reflect_excludes_expand_tool_when_text_disabled():

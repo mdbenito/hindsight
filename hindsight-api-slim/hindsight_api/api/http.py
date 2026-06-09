@@ -1352,7 +1352,8 @@ class DocumentResponse(BaseModel):
 
     id: str
     bank_id: str
-    original_text: str
+    # None when document text storage is disabled (HINDSIGHT_API_STORE_DOCUMENT_TEXT=false).
+    original_text: str | None
     content_hash: str | None
     created_at: str
     updated_at: str
@@ -6155,6 +6156,11 @@ def _register_routes(app: FastAPI):
             raise HTTPException(status_code=e.status_code, detail=e.reason)
         except (AuthenticationError, HTTPException):
             raise
+        except ValueError as e:
+            # Invalid request parameters (e.g. duplicate document_ids, or
+            # update_mode='append' when document text storage is disabled) are
+            # client errors, not server faults.
+            raise HTTPException(status_code=400, detail=str(e))
         except Exception as e:
             import traceback
 
