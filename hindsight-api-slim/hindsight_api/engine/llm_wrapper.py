@@ -232,6 +232,7 @@ _PROVIDERS_WITHOUT_API_KEY = frozenset(
         "litellm",
         "litellmrouter",
         "bedrock",
+        "nous",
     }
 )
 
@@ -249,6 +250,7 @@ def create_llm_provider(
     reasoning_effort: str,
     groq_service_tier: str | None = None,
     openai_service_tier: str | None = None,
+    bedrock_service_tier: str | None = None,
     extra_body: dict[str, Any] | None = None,
     default_headers: dict[str, str] | None = None,
     vertexai_project_id: str | None = None,
@@ -269,7 +271,12 @@ def create_llm_provider(
         reasoning_effort: Reasoning effort level for supported providers.
         groq_service_tier: Groq service tier (for Groq provider) - "on_demand", "flex", or "auto".
         openai_service_tier: OpenAI service tier (for OpenAI provider) - None (default) or "flex" (50% cheaper).
-        extra_body: Extra body params merged into OpenAI-compatible API calls.
+        bedrock_service_tier: Bedrock service tier (for Bedrock provider) - None (default), "flex", "priority", or "reserved".
+        extra_body: Extra request-body params merged into the provider's native
+            call. Threaded into OpenAI-compatible, Fireworks, Anthropic, Gemini/
+            VertexAI and LiteLLM providers (each merges them in its own parameter
+            space). Keys must use each provider's native names (e.g. ``max_tokens``
+            for OpenAI/Anthropic vs ``max_output_tokens`` for Gemini).
         default_headers: Custom headers passed as ``default_headers`` to provider SDK clients
             (used by operators routing through proxies / request-tracing middleware). Currently
             wired into the Anthropic provider; other providers may opt in as needed.
@@ -345,6 +352,7 @@ def create_llm_provider(
             vertexai_credentials=vertexai_credentials,
             gemini_safety_settings=gemini_safety_settings,
             prompt_cache_enabled=prompt_cache_enabled,
+            extra_body=extra_body,
         )
 
     elif provider_lower == "anthropic":
@@ -355,6 +363,7 @@ def create_llm_provider(
             model=model,
             reasoning_effort=reasoning_effort,
             default_headers=default_headers,
+            extra_body=extra_body,
         )
 
     elif provider_lower == "litellm":
@@ -364,6 +373,7 @@ def create_llm_provider(
             base_url=base_url,
             model=model,
             reasoning_effort=reasoning_effort,
+            extra_body=extra_body,
         )
 
     elif provider_lower == "litellmrouter":
@@ -381,6 +391,7 @@ def create_llm_provider(
             model=model,
             config=litellmrouter_config,
             reasoning_effort=reasoning_effort,
+            extra_body=extra_body,
         )
 
     elif provider_lower == "bedrock":
@@ -392,6 +403,8 @@ def create_llm_provider(
             base_url=base_url,
             model=bedrock_model,
             reasoning_effort=reasoning_effort,
+            extra_body=extra_body,
+            bedrock_service_tier=bedrock_service_tier,
         )
 
     elif provider_lower == "llamacpp":
@@ -417,6 +430,21 @@ def create_llm_provider(
         # native (non-OpenAI) batch API on top. The existing LiteLLM
         # ``fireworks_ai/...`` online path (provider="litellm") is untouched.
         return FireworksLLM(
+            provider=provider,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            reasoning_effort=reasoning_effort,
+            extra_body=extra_body,
+        )
+
+    elif provider_lower == "nous":
+        # Nous Portal is OpenAI-compatible on the wire; NousLLM adds rotating
+        # inference:invoke JWT auth read natively from ~/.hermes/auth.json
+        # (no static api_key, no hermes_cli dependency — same shape as Codex).
+        from hindsight_api.engine.providers.nous_llm import NousLLM
+
+        return NousLLM(
             provider=provider,
             api_key=api_key,
             base_url=base_url,
@@ -469,6 +497,7 @@ class LLMProvider:
         reasoning_effort: str = "low",
         groq_service_tier: str | None = None,
         openai_service_tier: str | None = None,
+        bedrock_service_tier: str | None = None,
         gemini_safety_settings: list | None = None,
         prompt_cache_enabled: bool = False,
         extra_body: dict[str, Any] | None = None,
@@ -486,8 +515,10 @@ class LLMProvider:
             reasoning_effort: Reasoning effort level for supported providers.
             groq_service_tier: Groq service tier ("on_demand", "flex", "auto") - from config.
             openai_service_tier: OpenAI service tier (None or "flex") - from config.
+            bedrock_service_tier: Bedrock service tier (None, "flex", "priority", "reserved") - from config.
             gemini_safety_settings: Safety settings for Gemini/VertexAI providers.
-            extra_body: Extra body params merged into OpenAI-compatible API calls.
+            extra_body: Extra request-body params merged into the provider's native call
+                (OpenAI-compatible, Fireworks, Anthropic, Gemini/VertexAI, LiteLLM).
             default_headers: Custom headers passed as ``default_headers`` to provider SDK clients.
                 Used by operators routing through proxies / request-tracing middleware. Falls
                 back to ``HindsightConfig.llm_default_headers`` (env: ``HINDSIGHT_API_LLM_DEFAULT_HEADERS``)
@@ -507,6 +538,7 @@ class LLMProvider:
         # Service tiers from hierarchical config (not env vars)
         self.groq_service_tier = groq_service_tier
         self.openai_service_tier = openai_service_tier
+        self.bedrock_service_tier = bedrock_service_tier
         # Gemini safety settings (instance default; can be overridden per-request via context var)
         self.gemini_safety_settings = gemini_safety_settings
         # Gemini prompt caching: when True, retain extraction (and any future
@@ -553,6 +585,7 @@ class LLMProvider:
             "zai",
             "opencode-go",
             "fireworks",
+            "nous",
         ]
         if self.provider not in valid_providers:
             raise ValueError(f"Invalid LLM provider: {self.provider}. Must be one of: {', '.join(valid_providers)}")
@@ -577,6 +610,8 @@ class LLMProvider:
                 self.base_url = "https://api.z.ai/api/coding/paas/v4"
             elif self.provider == "opencode-go":
                 self.base_url = "https://opencode.ai/zen/go/v1"
+            elif self.provider == "nous":
+                self.base_url = "https://inference-api.nousresearch.com/v1"
 
         # Prepare Vertex AI config (if applicable)
         vertexai_project_id = None
@@ -669,6 +704,7 @@ class LLMProvider:
             reasoning_effort=self.reasoning_effort,
             groq_service_tier=self.groq_service_tier,
             openai_service_tier=self.openai_service_tier,
+            bedrock_service_tier=self.bedrock_service_tier,
             extra_body=self.extra_body,
             default_headers=self.default_headers,
             vertexai_project_id=vertexai_project_id,
@@ -754,7 +790,10 @@ class LLMProvider:
             initial_backoff: Initial backoff time in seconds.
             max_backoff: Maximum backoff time in seconds.
             skip_validation: Return raw JSON without Pydantic validation.
-            strict_schema: Use strict JSON schema enforcement (OpenAI only). Guarantees all required fields.
+            strict_schema: Per-call override requesting grammar-enforced (json_schema strict)
+                structured output instead of the soft json_object path. The server-level
+                HINDSIGHT_API_LLM_STRICT_SCHEMA flag is OR-ed in here so it applies to every call;
+                providers without a strict mode ignore it.
             return_usage: If True, return tuple (result, TokenUsage) instead of just result.
 
         Returns:
@@ -773,6 +812,16 @@ class LLMProvider:
 
         structured = "+structured" if response_format is not None else ""
         set_stage(f"llm.{self.provider}.{scope}{structured}")
+
+        # Resolve strict-schema once, here, rather than in each provider: the
+        # per-call argument OR the server-level HINDSIGHT_API_LLM_STRICT_SCHEMA
+        # flag. Providers with a json_schema response_format (OpenAI-compatible,
+        # LiteLLM) then grammar-enforce structured output instead of the fragile
+        # soft json_object path; Gemini already enforces its native response_schema,
+        # and providers without a strict mode simply ignore the flag.
+        from ..config import get_config
+
+        strict_schema = strict_schema or get_config().llm_strict_schema
 
         # LLM call observability flows through the OTel GenAI recorder
         # (tracing.get_span_recorder().record_llm_call). Provider implementations
@@ -1097,6 +1146,7 @@ class LLMProvider:
             DEFAULT_LLM_REASONING_EFFORT,
             ENV_LLM_API_KEY,
             ENV_LLM_BASE_URL,
+            ENV_LLM_BEDROCK_SERVICE_TIER,
             ENV_LLM_DEFAULT_HEADERS,
             ENV_LLM_EXTRA_BODY,
             ENV_LLM_MODEL,
@@ -1128,6 +1178,7 @@ class LLMProvider:
             reasoning_effort=os.getenv(ENV_LLM_REASONING_EFFORT, DEFAULT_LLM_REASONING_EFFORT),
             extra_body=extra_body,
             default_headers=default_headers,
+            bedrock_service_tier=os.getenv(ENV_LLM_BEDROCK_SERVICE_TIER) or None,
         )
 
 

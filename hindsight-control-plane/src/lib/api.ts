@@ -7,6 +7,26 @@ import { toast } from "sonner";
 import { bankApi, bankStatsApi, documentApi, memoryApi } from "./bank-url";
 import { stripBasePath, withBasePath } from "./base-path";
 
+/**
+ * Reduce an API error `details` value to a string safe to render in a toast.
+ * Endpoints may return a plain string or a structured object (e.g. a Memory
+ * Defense block returns `{violations: [{message}]}`); objects cannot be passed
+ * to sonner/React directly.
+ */
+function describeErrorDetails(details: unknown): string | undefined {
+  if (details == null) return undefined;
+  if (typeof details === "string") return details;
+  if (typeof details === "object") {
+    const violations = (details as { violations?: Array<{ message?: string }> }).violations;
+    if (Array.isArray(violations)) {
+      const messages = violations.map((v) => v?.message).filter(Boolean);
+      if (messages.length > 0) return messages.join("; ");
+    }
+    return JSON.stringify(details);
+  }
+  return String(details);
+}
+
 export interface WebhookHttpConfig {
   method: string;
   timeout_seconds: number;
@@ -130,6 +150,20 @@ export interface LLMRequestStatsResponse {
   buckets: LLMRequestStatsBucket[];
 }
 
+/**
+ * Last-known progress snapshot for a long-running async operation (consolidation,
+ * batch retain). Written at coarse phase/batch boundaries by the worker; null until
+ * the operation reaches its first checkpoint. `processed`/`total` advancing across
+ * polls (with a moving `at`) means healthy; frozen numbers mean worth investigating.
+ */
+export interface OperationProgress {
+  stage: string;
+  at: string;
+  processed?: number | null;
+  total?: number | null;
+  detail?: Record<string, number> | null;
+}
+
 export type TagsMatch = "any" | "all" | "any_strict" | "all_strict";
 
 export type TagGroup =
@@ -194,7 +228,7 @@ export class ControlPlaneClient {
 
         // Try to parse error response
         let errorMessage = `HTTP ${response.status}`;
-        let errorDetails: string | undefined;
+        let errorDetails: unknown;
 
         try {
           const errorData = await response.json();
@@ -212,8 +246,11 @@ export class ControlPlaneClient {
           }
         }
 
-        // Show toast with different styles based on status code
-        const description = errorDetails || errorMessage;
+        // Coerce details into a string for the toast. Some endpoints return a
+        // structured detail object — e.g. a Memory Defense block responds with
+        // {violations: [{message, ...}]} — and React/sonner cannot render an
+        // object as a child (it throws "Objects are not valid as a React child").
+        const description = describeErrorDetails(errorDetails) || errorMessage;
         const status = response.status;
 
         if (status >= 400 && status < 500) {
@@ -451,8 +488,10 @@ export class ControlPlaneClient {
         items_count: number;
         document_id: string | null;
         created_at: string;
+        updated_at?: string | null;
         status: string;
         error_message: string | null;
+        progress?: OperationProgress | null;
       }>;
     }>(`/api/operations/${encodeURIComponent(bankId)}${query ? `?${query}` : ""}`);
   }
@@ -945,6 +984,7 @@ export class ControlPlaneClient {
       updated_at: string | null;
       completed_at: string | null;
       error_message: string | null;
+      progress?: OperationProgress | null;
       result_metadata?: {
         items_count?: number;
         total_tokens?: number;
@@ -1290,6 +1330,7 @@ export class ControlPlaneClient {
         document_import_api: boolean;
         audit_log: boolean;
         llm_trace: boolean;
+        store_document_text: boolean;
       };
     }>("/api/version");
   }
@@ -1426,6 +1467,22 @@ export class ControlPlaneClient {
       config: Record<string, any>;
       overrides: Record<string, any>;
     }>(bankApi(bankId, "/config"));
+  }
+
+  /**
+   * Probe the LLMs this bank uses (retain/consolidation/reflect). Deliberate action
+   * (makes a real provider call) — do NOT poll this. Status only; never the API key.
+   */
+  async testBankLlm(bankId: string) {
+    return this.fetchApi<{
+      bank_id: string;
+      operations: {
+        operation: "retain" | "consolidation" | "reflect";
+        ok: boolean;
+        status: "connected" | "not_configured" | "auth_failed" | "unreachable" | "timeout";
+        latency_ms: number | null;
+      }[];
+    }>(bankApi(bankId, "/health/llm"), { method: "POST" });
   }
 
   /**

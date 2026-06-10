@@ -86,9 +86,7 @@ async def _import(memory, bank_id, archive, request_context, on_conflict="skip")
     inline and is already completed when submit returns.
     """
     submission = await memory.import_documents_async(bank_id, archive, request_context, on_conflict)
-    status = await memory.get_operation_status(
-        bank_id, submission["operation_id"], request_context=request_context
-    )
+    status = await memory.get_operation_status(bank_id, submission["operation_id"], request_context=request_context)
     assert status["status"] == "completed", status
     return status["result_metadata"]
 
@@ -99,12 +97,19 @@ def test_export_bank_covers_schema():
     from hindsight_api.admin.cli import BACKUP_TABLES
     from hindsight_api.engine.transfer.export import (
         _BANK_ROW_TABLES,
+        _CARRIED_HISTORY_TABLES,
         _HISTORY_TABLES,
         _REPLAYED_TABLES,
         _SKIP_TABLES,
     )
 
-    buckets = [set(_REPLAYED_TABLES), set(_BANK_ROW_TABLES), set(_HISTORY_TABLES), set(_SKIP_TABLES)]
+    buckets = [
+        set(_REPLAYED_TABLES),
+        set(_BANK_ROW_TABLES),
+        set(_CARRIED_HISTORY_TABLES),
+        set(_HISTORY_TABLES),
+        set(_SKIP_TABLES),
+    ]
     classified = set().union(*buckets)
     assert classified == set(BACKUP_TABLES), (
         f"export-bank classification drifted from BACKUP_TABLES: "
@@ -149,6 +154,7 @@ async def test_export_bank_contents(memory, request_context):
         assert manifest.document_count == 1
         assert manifest.webhook_count == 1
         assert "mental_models.json" in names and "directives.json" in names
+        assert "mental_model_history.json" in names
         assert any(d.endswith(".json") and d.startswith("documents/") for d in names)
         # No history files unless requested.
         assert not any(n.startswith("history/") for n in names)
@@ -317,6 +323,43 @@ async def test_bank_export_import_exact_roundtrip(memory, request_context):
 
 
 @pytest.mark.asyncio
+async def test_bank_roundtrip_carries_mental_model_history(memory, request_context):
+    """Mental-model refresh history survives export/import. Mental models keep a
+    stable (id, bank_id), so the dedicated mental_model_history rows are carried
+    (the surrogate id is dropped on export; the target reassigns it)."""
+    bank = _unique_bank("bank_mm_hist")
+    try:
+        await memory.get_bank_profile(bank, request_context=request_context)
+        await memory.create_mental_model(
+            bank,
+            name="Work model",
+            source_query="where do people work",
+            content="v1",
+            mental_model_id="mm-1",
+            request_context=request_context,
+        )
+        await memory.update_mental_model(bank, mental_model_id="mm-1", content="v2", request_context=request_context)
+        await memory.update_mental_model(bank, mental_model_id="mm-1", content="v3", request_context=request_context)
+        # Two refreshes → two snapshots (previous content v1 then v2), newest-first.
+        before = await memory.get_mental_model_history(bank, "mm-1", request_context=request_context)
+        assert [h["previous_content"] for h in before] == ["v2", "v1"]
+
+        from hindsight_api.engine.transfer import export_bank
+
+        backend = await memory._get_backend()
+        async with acquire_with_retry(backend) as conn:
+            archive = await export_bank(conn, bank)
+        await memory.delete_bank(bank, request_context=request_context)
+        result = await memory.import_bank_async(archive, request_context)
+        assert result.mental_model_history_imported == 2
+
+        after = await memory.get_mental_model_history(bank, "mm-1", request_context=request_context)
+        assert [h["previous_content"] for h in after] == ["v2", "v1"]
+    finally:
+        await memory.delete_bank(bank, request_context=request_context)
+
+
+@pytest.mark.asyncio
 async def test_import_bank_rejects_documents_archive(memory, request_context):
     """A documents-only archive must be rejected by the bank importer."""
     bank = _unique_bank("bank_reject")
@@ -426,13 +469,11 @@ async def _bank_snapshot(memory, bank_id):
     backend = await memory._get_backend()
     async with acquire_with_retry(backend) as conn:
         docs = await conn.fetch(
-            f"SELECT id, COALESCE(length(original_text), 0) AS len FROM {fq_table('documents')} "
-            f"WHERE bank_id = $1",
+            f"SELECT id, COALESCE(length(original_text), 0) AS len FROM {fq_table('documents')} WHERE bank_id = $1",
             bank_id,
         )
         chunks = await conn.fetch(
-            f"SELECT document_id, chunk_index, length(chunk_text) AS len FROM {fq_table('chunks')} "
-            f"WHERE bank_id = $1",
+            f"SELECT document_id, chunk_index, length(chunk_text) AS len FROM {fq_table('chunks')} WHERE bank_id = $1",
             bank_id,
         )
         ftypes = await conn.fetch(
@@ -542,9 +583,7 @@ async def test_export_import_observations(memory, request_context):
         backend = await memory._get_backend()
         async with acquire_with_retry(backend) as conn:
             async with conn.transaction():
-                await _create_observation_directly(
-                    conn, memory, src, source_ids, "Alice and Bob are colleagues."
-                )
+                await _create_observation_directly(conn, memory, src, source_ids, "Alice and Bob are colleagues.")
 
         # Export WITHOUT observations -> none in the archive (the bank may also
         # contain auto-consolidation observations; the flag is what gates them).
@@ -713,9 +752,7 @@ async def test_include_observations_requires_whole_bank_export(memory, request_c
         await _retain(memory, src, "Alice works at Google.", request_context, "doc-1")
         # Subset export (document_ids set) + observations must be rejected.
         with pytest.raises(ValueError, match="whole bank"):
-            await memory.export_documents_async(
-                src, request_context, ["doc-1"], include_observations=True
-            )
+            await memory.export_documents_async(src, request_context, ["doc-1"], include_observations=True)
         # Whole-bank export with observations is fine; subset without observations is fine.
         await memory.export_documents_async(src, request_context, include_observations=True)
         await memory.export_documents_async(src, request_context, ["doc-1"])

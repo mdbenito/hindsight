@@ -14,6 +14,7 @@ import re
 import time
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
+from ...config import get_config
 from .models import DirectiveInfo, LLMCall, ReflectAgentResult, TokenUsageSummary, ToolCall
 from .prompts import (
     _extract_directive_rules,
@@ -302,6 +303,24 @@ def _is_context_overflow_error(exc: Exception) -> bool:
     )
 
 
+def _all_mental_models_are_usable_and_fresh(tool_output: dict[str, Any]) -> bool:
+    """Return whether every retrieved mental model is explicitly fresh and has answerable content.
+
+    Used to decide — without an extra LLM call — whether a forced
+    ``search_mental_models`` result is trustworthy enough to hand control back
+    to the agent. A model is usable only when it is explicitly ``is_stale ==
+    False`` (an unknown/missing staleness flag is treated as unsafe) and has
+    non-empty content.
+    """
+    models = tool_output.get("mental_models") or []
+    for model in models:
+        if model.get("is_stale") is not False:
+            return False
+        if not str(model.get("content") or "").strip():
+            return False
+    return True
+
+
 async def run_reflect_agent(
     llm_config: "LLMProvider",
     bank_id: str,
@@ -358,12 +377,16 @@ async def run_reflect_agent(
     # Extract directive rules for tool schema (if any)
     directive_rules = _extract_directive_rules(directives) if directives else None
 
-    # Get tools for this agent (with directive compliance field if directives exist)
+    # Get tools for this agent (with directive compliance field if directives exist).
+    # The expand tool only reads back raw source text (chunks/documents), so it is
+    # useless and excluded when document text storage is disabled.
+    include_expand = get_config().store_document_text
     tools = get_reflect_tools(
         directive_rules=directive_rules,
         include_mental_models=has_mental_models,
         include_observations=include_observations,
         include_recall=include_recall,
+        include_expand=include_expand,
     )
     # Build set of enabled tool names to guard against LLM hallucinating disabled tool calls
     enabled_tools: frozenset[str] = frozenset(t["function"]["name"] for t in tools if t.get("type") == "function")
@@ -464,6 +487,11 @@ async def run_reflect_agent(
         )
 
     consecutive_errors = 0
+    # When a forced ``search_mental_models`` returns fresh, usable models on a
+    # low/mid-budget call, we stop forcing the lower retrieval layers from this
+    # iteration onward and let the agent answer (or retrieve deeper itself)
+    # under ``auto`` tool choice. None means the full forced path still applies.
+    stop_forcing_from_iteration: int | None = None
     for iteration in range(max_iterations):
         is_last = iteration == max_iterations - 1
 
@@ -477,7 +505,9 @@ async def run_reflect_agent(
                 messages=[
                     {
                         "role": "system",
-                        "content": build_final_system_prompt(bank_profile.get("mission"), llm_output_language),
+                        "content": build_final_system_prompt(
+                            bank_profile.get("mission"), llm_output_language, directives
+                        ),
                     },
                     {"role": "user", "content": prompt},
                 ],
@@ -537,7 +567,9 @@ async def run_reflect_agent(
                 messages=[
                     {
                         "role": "system",
-                        "content": build_final_system_prompt(bank_profile.get("mission"), llm_output_language),
+                        "content": build_final_system_prompt(
+                            bank_profile.get("mission"), llm_output_language, directives
+                        ),
                     },
                     {"role": "user", "content": prompt},
                 ],
@@ -592,8 +624,11 @@ async def run_reflect_agent(
         if include_recall:
             forced_sequence.append("recall")
 
-        if iteration < len(forced_sequence):
-            iter_tool_choice: str | dict = {"type": "function", "function": {"name": forced_sequence[iteration]}}
+        if stop_forcing_from_iteration is not None and iteration >= stop_forcing_from_iteration:
+            # A fresh mental model already short-circuited the forced path.
+            iter_tool_choice: str | dict = "auto"
+        elif iteration < len(forced_sequence):
+            iter_tool_choice = {"type": "function", "function": {"name": forced_sequence[iteration]}}
         else:
             iter_tool_choice = "auto"
 
@@ -653,7 +688,9 @@ async def run_reflect_agent(
                 messages=[
                     {
                         "role": "system",
-                        "content": build_final_system_prompt(bank_profile.get("mission"), llm_output_language),
+                        "content": build_final_system_prompt(
+                            bank_profile.get("mission"), llm_output_language, directives
+                        ),
                     },
                     {"role": "user", "content": prompt},
                 ],
@@ -777,7 +814,9 @@ async def run_reflect_agent(
                 messages=[
                     {
                         "role": "system",
-                        "content": build_final_system_prompt(bank_profile.get("mission"), llm_output_language),
+                        "content": build_final_system_prompt(
+                            bank_profile.get("mission"), llm_output_language, directives
+                        ),
                     },
                     {"role": "user", "content": prompt},
                 ],
@@ -882,7 +921,9 @@ async def run_reflect_agent(
             hallucinated_tools = []
             for tc in other_tools:
                 norm = _normalize_tool_name(tc.name)
-                if enabled_tools is not None and norm not in enabled_tools and norm not in ("done", "expand"):
+                # "done" is always available. "expand" is governed by enabled_tools
+                # (it is excluded when text storage is disabled), so it is not hardcoded here.
+                if enabled_tools is not None and norm not in enabled_tools and norm != "done":
                     hallucinated_tools.append(tc)
                 else:
                     allowed_tools.append(tc)
@@ -956,6 +997,25 @@ async def run_reflect_agent(
                     for mm in output["mental_models"]:
                         if "id" in mm:
                             available_mental_model_ids.add(mm["id"])
+                    # Deterministic short-circuit (no extra LLM call): on a
+                    # low/mid-budget call, if every retrieved mental model is
+                    # fresh and has usable content, stop forcing the lower
+                    # retrieval layers. The next iteration runs under ``auto``
+                    # tool choice, so the agent can answer directly when the
+                    # mental model suffices, or — having just read it — issue a
+                    # targeted ``search_observations``/``recall`` itself. Stale,
+                    # empty, or missing mental models keep the full forced path.
+                    if (
+                        stop_forcing_from_iteration is None
+                        and (budget or "low").lower() != "high"
+                        and output.get("mental_models")
+                        and _all_mental_models_are_usable_and_fresh(output)
+                    ):
+                        stop_forcing_from_iteration = iteration + 1
+                        logger.info(
+                            f"[REFLECT {reflect_id}] Fresh mental models sufficient on iteration {iteration + 1}; "
+                            "releasing forced lower-level retrieval to auto."
+                        )
 
                 if (
                     normalized_tool_name == "search_observations"
@@ -1191,8 +1251,10 @@ async def _execute_tool(
     # Normalize tool name for various LLM output formats
     tool_name = _normalize_tool_name(tool_name)
 
-    # Guard against LLMs hallucinating calls to tools that were not provided
-    if enabled_tools is not None and tool_name not in enabled_tools and tool_name not in ("done", "expand"):
+    # Guard against LLMs hallucinating calls to tools that were not provided.
+    # "done" is always available; "expand" is governed by enabled_tools (excluded
+    # when text storage is disabled), so it is not hardcoded as always-allowed here.
+    if enabled_tools is not None and tool_name not in enabled_tools and tool_name != "done":
         return {"error": f"Tool '{tool_name}' is not available. Use only the tools provided to you."}
 
     if tool_name == "search_mental_models":

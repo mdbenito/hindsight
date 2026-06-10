@@ -289,6 +289,28 @@ export type BankListResponse = {
 };
 
 /**
+ * BankLlmHealthResponse
+ *
+ * Per-bank LLM connectivity probe across retain/consolidation/reflect. Operations
+ * that share a configuration are probed once. Discloses status only — never the
+ * provider, model, endpoint, API key, or raw error.
+ */
+export type BankLlmHealthResponse = {
+  /**
+   * Bank Id
+   *
+   * Bank identifier
+   */
+  bank_id: string;
+  /**
+   * Operations
+   *
+   * Connectivity status per operation (retain, consolidation, reflect)
+   */
+  operations: Array<LlmOperationHealth>;
+};
+
+/**
  * BankProfileResponse
  *
  * Response model for bank profile.
@@ -1372,7 +1394,7 @@ export type DocumentResponse = {
   /**
    * Original Text
    */
-  original_text: string;
+  original_text: string | null;
   /**
    * Content Hash
    */
@@ -1659,6 +1681,12 @@ export type FeaturesInfo = {
    */
   bank_config_api: boolean;
   /**
+   * Bank Llm Health
+   *
+   * Whether the per-bank LLM connectivity probe is enabled
+   */
+  bank_llm_health: boolean;
+  /**
    * File Upload Api
    *
    * Whether file upload/conversion API is enabled
@@ -1688,6 +1716,12 @@ export type FeaturesInfo = {
    * Whether per-bank LLM request tracing is enabled
    */
   llm_trace: boolean;
+  /**
+   * Store Document Text
+   *
+   * Whether raw source text is persisted. When false, document/chunk source text is not stored.
+   */
+  store_document_text: boolean;
 };
 
 /**
@@ -2072,6 +2106,39 @@ export type ListTagsResponse = {
 };
 
 /**
+ * LlmOperationHealth
+ *
+ * LLM connectivity status for a single operation. Status only — no provider/model/
+ * endpoint/error, so the probe never discloses the LLM configuration.
+ */
+export type LlmOperationHealth = {
+  /**
+   * LlmHealthOperation
+   *
+   * Operation whose LLM was probed
+   */
+  operation: "retain" | "consolidation" | "reflect";
+  /**
+   * Ok
+   *
+   * True only when the probe connected successfully
+   */
+  ok: boolean;
+  /**
+   * LlmHealthStatus
+   *
+   * 'connected'; 'not_configured' (provider is 'none'); 'auth_failed' (rejected — usually a wrong/expired API key); 'unreachable' (call failed); 'timeout'
+   */
+  status: "connected" | "not_configured" | "auth_failed" | "unreachable" | "timeout";
+  /**
+   * Latency Ms
+   *
+   * Round-trip latency of the probe call
+   */
+  latency_ms?: number | null;
+};
+
+/**
  * MemoriesTimeseriesResponse
  *
  * Time-series of memory ingestion bucketed by time and fact type.
@@ -2415,6 +2482,52 @@ export type MentalModelTriggerOutput = {
 };
 
 /**
+ * OperationProgress
+ *
+ * Last-known progress snapshot for a long-running async operation.
+ *
+ * Written at coarse phase/batch boundaries by the worker (consolidation, batch
+ * retain). Lets an operator polling the operation status API distinguish a healthy
+ * long-running job (``processed`` advancing across polls) from a frozen one (same
+ * numbers, no movement in ``at``). Absent (``null``) on operations that never
+ * reached a checkpoint — completed-instantly or pre-feature rows.
+ */
+export type OperationProgress = {
+  /**
+   * Stage
+   *
+   * Coarse phase the operation last reported (e.g. 'processing_batch').
+   */
+  stage: string;
+  /**
+   * At
+   *
+   * ISO-8601 timestamp when this snapshot was written.
+   */
+  at: string;
+  /**
+   * Processed
+   *
+   * Units of work finished so far (sub-batches, memories), when known.
+   */
+  processed?: number | null;
+  /**
+   * Total
+   *
+   * Total units of work for the operation, when known.
+   */
+  total?: number | null;
+  /**
+   * Detail
+   *
+   * Operation-specific counters (e.g. observations_created, round, items_in_sub_batch).
+   */
+  detail?: {
+    [key: string]: number;
+  } | null;
+};
+
+/**
  * OperationResponse
  *
  * Response model for a single async operation.
@@ -2441,6 +2554,12 @@ export type OperationResponse = {
    */
   created_at: string;
   /**
+   * Updated At
+   *
+   * When this operation's row last changed (claim, progress heartbeat, or completion).
+   */
+  updated_at?: string | null;
+  /**
    * Status
    */
   status: string;
@@ -2460,6 +2579,10 @@ export type OperationResponse = {
    * When the worker will next attempt this operation. For a pending operation, a value in the future indicates the task is waiting rather than available for immediate pickup — for example, an extension may have raised DeferOperation to park the task until some backpressure window opens. Always null for completed tasks.
    */
   next_retry_at?: string | null;
+  /**
+   * Last-known progress snapshot for a running operation; null if none was recorded.
+   */
+  progress?: OperationProgress | null;
 };
 
 /**
@@ -2508,6 +2631,10 @@ export type OperationStatusResponse = {
    * When the worker will next attempt this operation. For a pending operation, a value in the future indicates the task is parked (e.g. by an extension raising DeferOperation) rather than awaiting immediate pickup.
    */
   next_retry_at?: string | null;
+  /**
+   * Last-known progress snapshot for a running operation; null if none was recorded.
+   */
+  progress?: OperationProgress | null;
   /**
    * Result Metadata
    *
@@ -3506,10 +3633,6 @@ export type ValidationError = {
   ctx?: {
     [key: string]: unknown;
   };
-  /**
-   * URL
-   */
-  url?: string;
 };
 
 /**
@@ -4078,6 +4201,42 @@ export type GetAgentStatsResponses = {
 };
 
 export type GetAgentStatsResponse = GetAgentStatsResponses[keyof GetAgentStatsResponses];
+
+export type TestBankLlmData = {
+  body?: never;
+  headers?: {
+    /**
+     * Authorization
+     */
+    authorization?: string | null;
+  };
+  path: {
+    /**
+     * Bank Id
+     */
+    bank_id: string;
+  };
+  query?: never;
+  url: "/v1/default/banks/{bank_id}/health/llm";
+};
+
+export type TestBankLlmErrors = {
+  /**
+   * Validation Error
+   */
+  422: HttpValidationError;
+};
+
+export type TestBankLlmError = TestBankLlmErrors[keyof TestBankLlmErrors];
+
+export type TestBankLlmResponses = {
+  /**
+   * Successful Response
+   */
+  200: BankLlmHealthResponse;
+};
+
+export type TestBankLlmResponse = TestBankLlmResponses[keyof TestBankLlmResponses];
 
 export type GetMemoriesTimeseriesData = {
   body?: never;
