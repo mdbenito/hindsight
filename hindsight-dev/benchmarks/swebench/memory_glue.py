@@ -403,6 +403,11 @@ class MemoryGlue:
         self.summary_max_chars = summary_max_chars
         self.stats = MemoryOpStats()
         self.last_retained_summary: str | None = None  # for content analysis / debug dumps
+        # Reflect, unlike recall, does not fall silent on an empty bank — it fabricates a
+        # confident synthesis from the query itself (observed: a 1.7K-char "Verified Knowledge"
+        # block from zero memories that preceded a 250-step runaway). Banks are reset at run
+        # start, so "nothing retained yet" == empty bank; reflect is skipped until first retain.
+        self._retained_anything = False
         self._client = Hindsight(base_url=base_url, api_key=api_token) if enabled else None
 
     # -- bank lifecycle ----------------------------------------------------------------
@@ -430,7 +435,29 @@ class MemoryGlue:
 
     def _create_bank(self) -> None:
         observations_mission = None
+        reflect_mission = None
         if self.retain_style == "procedural":
+            # Reflect's observed failure mode: synthesis converts memory from evidence the
+            # agent weighs into INSTRUCTIONS it follows verbatim — a 90%-right synthesis with
+            # a fatal 10% (e.g. "propagate annotations" instead of _filtered_relations)
+            # produces a confident wrong patch and suppresses the exploration that wins.
+            # This mission forces evidence-not-prescription with verified/hypothesis labels.
+            reflect_mission = (
+                "You are preparing background context for an engineer who is about to work on "
+                "a task and will do their own diagnosis. Report what memory actually contains "
+                "— do NOT prescribe a fix. Rules: (1) Never instruct the engineer to make a "
+                "specific change ('modify X to do Y'); present evidence and let them decide. "
+                "(2) Clearly separate VERIFIED knowledge (lessons from attempts that passed "
+                "the test suite, recorded failure evidence with test names) from HYPOTHESIS "
+                "(anything you are inferring) and label each part. (3) Keep failure records "
+                "scoped exactly as stored: what change was applied, in which method/file, and "
+                "which tests it failed — never generalize a failure into 'avoid X' or relocate "
+                "blame ('the real cause is in Z') without test evidence. (4) If memory contains "
+                "nothing relevant to the task, say exactly that in one sentence and nothing "
+                "else. Never present information taken from the task description itself as "
+                "remembered or verified knowledge. (5) Prefer brevity; omit anything memory "
+                "does not directly support."
+            )
             # Consolidation is the second rephrasing hop and it MERGES facts — two correctly
             # scoped failure facts about the same mechanism at different locations can
             # consolidate into "mechanism X fails in general", minting the exact poison the
@@ -477,6 +504,7 @@ class MemoryGlue:
             ),
             retain_mission=mission,
             observations_mission=observations_mission,
+            reflect_mission=reflect_mission,
         )
 
     # -- recall (before a task) --------------------------------------------------------
@@ -497,6 +525,8 @@ class MemoryGlue:
 
     def _reflect_context(self, problem_statement: str) -> str:
         """Ask Hindsight to reflect on the task using its memories; inject the synthesis."""
+        if not self._retained_anything:
+            return ""  # empty bank: match recall's natural silence instead of fabricating
         t0 = time.time()
         try:
             resp = self._client.reflect(
@@ -516,6 +546,12 @@ class MemoryGlue:
             self.stats.reflect_input_tokens += int(getattr(usage, "input_tokens", 0) or 0)
             self.stats.reflect_output_tokens += int(getattr(usage, "output_tokens", 0) or 0)
         text = (getattr(resp, "text", None) or "").strip()
+        # The synthesis sometimes ends with an ID-metadata block (memory_ids/observation_ids
+        # UUID lists) — provenance bookkeeping, not context; drop it from the injection.
+        for marker in ("\nmemory_ids:", "\nmental_model_ids:", "\nobservation_ids:"):
+            idx = text.find(marker)
+            if idx != -1:
+                text = text[:idx].rstrip()
         if text:
             self.stats.recall_hits += 1
         return text
@@ -746,6 +782,7 @@ class MemoryGlue:
         finally:
             self.stats.retain_seconds += time.time() - t0
             self.stats.retain_calls += 1
+        self._retained_anything = True
         usage = getattr(resp, "usage", None)
         if usage is not None:
             self.stats.retain_input_tokens += int(getattr(usage, "input_tokens", 0) or 0)
