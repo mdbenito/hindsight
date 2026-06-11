@@ -18,7 +18,7 @@ const perform = async (z, bundle) => {
   const response = await z.request({
     method: "POST",
     url: `${baseUrl(bundle)}/v1/default/banks/${enc(bundle.inputData.bank_id)}/memories`,
-    body: { items: [item], async: false },
+    body: { items: [item], async: bundle.inputData.async === true },
   });
   return response.data;
 };
@@ -68,6 +68,15 @@ module.exports = {
         type: "datetime",
         required: false,
         helpText: "When this content occurred. Defaults to now if left blank.",
+      },
+      {
+        key: "async",
+        label: "Process asynchronously",
+        type: "boolean",
+        required: false,
+        default: "false",
+        helpText:
+          "Return immediately and process in the background. Enable for very large content that might exceed Zapier's action timeout; pair it with the 'Retain Completed' trigger to act on completion.",
       },
     ],
     perform,

@@ -33,7 +33,7 @@ API-key auth. Provide:
 
 Point **API URL** at your instance. If it runs without auth, leave **API Key** blank — no `Authorization` header is sent. Triggers also work self-hosted: they rely on your instance making an _outbound_ POST to Zapier's webhook URL, which works for any box with outbound internet (only fully air-gapped instances can't).
 
-> Webhook deliveries are unsigned in this version; security relies on Zapier's unguessable target URL.
+> Each trigger registers its webhook with a freshly generated HMAC secret and verifies the `X-Hindsight-Signature: sha256=<hmac>` header on every delivery, rejecting any payload whose signature doesn't match.
 
 ## Development
 
