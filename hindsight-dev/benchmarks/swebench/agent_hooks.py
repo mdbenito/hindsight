@@ -12,15 +12,26 @@ leaves the variable empty, so prompts are identical except for the injected memo
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from minisweagent.agents.default import DefaultAgent
 
 from .memory_glue import MemoryGlue
 
 
-def _usage_from_message(message: dict) -> tuple[int, int]:
-    """Extract (prompt_tokens, completion_tokens) from a litellm model message."""
+@dataclass
+class TokenUsage:
+    prompt_tokens: int
+    completion_tokens: int
+
+
+def _usage_from_message(message: dict) -> TokenUsage:
+    """Extract token usage from a litellm model message (external dict boundary)."""
     usage = ((message.get("extra") or {}).get("response") or {}).get("usage") or {}
-    return int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0)
+    return TokenUsage(
+        prompt_tokens=int(usage.get("prompt_tokens") or 0),
+        completion_tokens=int(usage.get("completion_tokens") or 0),
+    )
 
 
 class MeteredAgent(DefaultAgent):
@@ -35,9 +46,9 @@ class MeteredAgent(DefaultAgent):
 
     def query(self) -> dict:
         message = super().query()
-        pt, ct = _usage_from_message(message)
-        self.input_tokens += pt
-        self.output_tokens += ct
+        usage = _usage_from_message(message)
+        self.input_tokens += usage.prompt_tokens
+        self.output_tokens += usage.completion_tokens
         return message
 
     def transcript_text(self) -> str:
