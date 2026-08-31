@@ -281,6 +281,7 @@ pub fn create(
     max_tokens: i64,
     tags_match: Option<&str>,
     trigger_refresh_after_consolidation: bool,
+    trigger_mode: Option<&str>,
     verbose: bool,
     output_format: OutputFormat,
 ) -> Result<()> {
@@ -292,11 +293,14 @@ pub fn create(
 
     let tags_match = tags_match.map(parse_tags_match).transpose()?;
 
+    let mode = trigger_mode.map(parse_trigger_mode).transpose()?;
+
     // Only send a trigger when the user opted into one of its fields, so the
     // server's default behaviour (all_strict for tagged models) is preserved
     // otherwise.
-    let trigger = if trigger_refresh_after_consolidation || tags_match.is_some() {
+    let trigger = if trigger_refresh_after_consolidation || tags_match.is_some() || mode.is_some() {
         Some(types::MentalModelTriggerInput {
+            mode: mode.unwrap_or(types::Mode::Full),
             refresh_after_consolidation: trigger_refresh_after_consolidation,
             tags_match,
             ..default_trigger_input()

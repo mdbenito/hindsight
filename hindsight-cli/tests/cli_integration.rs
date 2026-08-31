@@ -776,8 +776,8 @@ fn test_mental_model_update_trigger_settings() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    // Create a mental model that refreshes after consolidation, so the update
-    // below has a non-default trigger setting to preserve.
+    // Create a delta mental model that also refreshes after consolidation, so
+    // the update below has non-default trigger settings to preserve.
     let output = run_hindsight(&[
         "mental-model",
         "create",
@@ -785,6 +785,8 @@ fn test_mental_model_update_trigger_settings() {
         "Test Trigger Mode Model",
         "What are the key facts?",
         "--trigger-refresh-after-consolidation",
+        "--trigger-mode",
+        "delta",
     ]);
     assert!(
         output.status.success(),
@@ -837,19 +839,21 @@ fn test_mental_model_update_trigger_settings() {
         run_hindsight(&argv)
     };
 
-    assert_eq!(stored_trigger()["refresh_after_consolidation"], true);
+    let trigger = stored_trigger();
+    assert_eq!(trigger["refresh_after_consolidation"], true);
+    assert_eq!(trigger["mode"], "delta", "create honours --trigger-mode");
 
-    // Switch the trigger to delta. The settings not named on the command line
-    // must survive: sending a freshly-built trigger used to reset them.
-    let output = update(&["--trigger-mode", "delta"]);
+    // Switch the trigger back to full. The settings not named on the command
+    // line must survive: sending a freshly-built trigger used to reset them.
+    let output = update(&["--trigger-mode", "full"]);
     assert!(
         output.status.success(),
-        "update --trigger-mode delta failed: stdout={}, stderr={}",
+        "update --trigger-mode full failed: stdout={}, stderr={}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     let trigger = stored_trigger();
-    assert_eq!(trigger["mode"], "delta");
+    assert_eq!(trigger["mode"], "full");
     assert_eq!(
         trigger["refresh_after_consolidation"], true,
         "changing the mode must not reset refresh_after_consolidation: {trigger}"
@@ -874,7 +878,7 @@ fn test_mental_model_update_trigger_settings() {
     assert_eq!(trigger["keep_trace"], true);
     assert_eq!(trigger["min_refresh_interval_seconds"], 900);
     assert_eq!(trigger["tags_match"], "any_strict");
-    assert_eq!(trigger["mode"], "delta", "mode must survive: {trigger}");
+    assert_eq!(trigger["mode"], "full", "mode must survive: {trigger}");
 
     // Moving the model onto a schedule clears the auto-refresh it was created
     // with — the two are mutually exclusive — and keeps everything else.

@@ -1052,6 +1052,11 @@ enum MentalModelCommands {
         /// Refresh this mental model automatically after observations consolidation
         #[arg(long)]
         trigger_refresh_after_consolidation: bool,
+
+        /// Refresh mode: full (default) regenerates the content from scratch on
+        /// each refresh, delta edits the existing content in place
+        #[arg(long)]
+        trigger_mode: Option<String>,
     },
 
     /// Update a mental model
@@ -1871,6 +1876,7 @@ fn run() -> Result<()> {
                 max_tokens,
                 tags_match,
                 trigger_refresh_after_consolidation,
+                trigger_mode,
             } => commands::mental_model::create(
                 &client,
                 &bank_id,
@@ -1881,6 +1887,7 @@ fn run() -> Result<()> {
                 max_tokens,
                 tags_match.as_deref(),
                 trigger_refresh_after_consolidation,
+                trigger_mode.as_deref(),
                 verbose,
                 output_format,
             ),
